@@ -1,7 +1,11 @@
 name:                pipes-p2p
 version:             0.1
-synopsis:            Library to create a p2p pipes networks
--- description:
+synopsis:            Library to create P2P networks with pipes.
+description:         Toy P2P network where nodes just exchange network
+                     addresses. For now this can be used as boilerplate code
+                     for developing P2P networks. In the future it should be
+                     possible to pass around serialized pipes which perform
+                     computations.
 homepage:            https://github.com/jdnavarro/pipes-p2p
 license:             BSD3
 license-file:        LICENSE
