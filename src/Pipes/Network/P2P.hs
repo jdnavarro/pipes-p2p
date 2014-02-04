@@ -4,7 +4,7 @@
 module Pipes.Network.P2P where
 
 import Control.Error
-import Control.Applicative (pure)
+import Control.Applicative ((<$>), (<*>), pure)
 import Control.Monad ((>=>), void, guard)
 -- import Data.Monoid (mappend)
 import Control.Concurrent (ThreadId, myThreadId, forkIO)
@@ -19,7 +19,7 @@ import qualified Data.Map as Map
 import Pipes
 import Pipes.Lift (errorP)
 import Pipes.Binary (Binary(put,get), decoded)
-import Pipes.Concurrent (Output, Input, Buffer(Unbounded), toOutput)
+import Pipes.Concurrent (Output, Input, Buffer(Unbounded), spawn, toOutput)
 import Pipes.Network.TCP
   ( HostPreference
   , HostName
@@ -46,6 +46,12 @@ data Node = Node
     , connections :: MVar (Map ThreadId Connection)
     , broadcaster :: MVar Mailbox
     }
+
+node :: Settings -> IO Node
+node settings = Node settings <$> conns <*> mb
+  where
+    conns = newMVar Map.empty
+    mb    = spawn Unbounded >>= newMVar
 
 data Settings = Settings
     { preference :: HostPreference
@@ -75,8 +81,8 @@ type Seed = (HostName, ServiceName)
 
 -- | Launch a node.
 launch :: Node -> Seed -> IO ()
-launch node@Node{..} (hn, sn) = do
-    serve (preference settings) (service settings) undefined -- (handle node . fst)
+launch n@Node{..} (hn, sn) = do
+    serve (preference settings) (service settings) undefined -- (handle n . fst)
     void . forkIO . connect hn sn $ \(sock, sockAddr) -> void . runMaybeT $ do
         -- handshake
         lift $ send sock (encode $ VER version)
@@ -93,7 +99,7 @@ launch node@Node{..} (hn, sn) = do
                   tid <- myThreadId
                   let conn = Connection sock sockAddr
                   modifyMVar_ connections $ pure . Map.insert tid conn
-                  handle node conn
+                  handle n conn
 
 handle :: Node -> Connection -> IO ()
 handle Node{..} Connection{..} = go
