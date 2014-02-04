@@ -10,7 +10,6 @@ import Control.Monad ((>=>), void, guard)
 import Control.Concurrent (ThreadId, myThreadId, forkIO)
 import Control.Concurrent.MVar
 import GHC.Generics (Generic)
-import Data.Binary (Binary(put,get))
 import qualified Data.Binary as Binary
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
@@ -19,8 +18,7 @@ import Data.Map (Map)
 import qualified Data.Map as Map
 import Pipes
 import Pipes.Lift (errorP)
-import qualified Pipes.Prelude as P
-import Pipes.Binary (decodeMany)
+import Pipes.Binary (Binary(put,get), decoded)
 import Pipes.Concurrent (Output, Input, Buffer(Unbounded), toOutput)
 import Pipes.Network.TCP
   ( HostPreference
@@ -35,6 +33,7 @@ import Pipes.Network.TCP
   , Socket
   , SockAddr
   )
+import Lens.Family2 ((^.))
 
 instance Binary HostPreference where
     put = undefined
@@ -97,10 +96,10 @@ launch node@Node{..} (hn, sn) = do
                   handle node conn
 
 handle :: Node -> Connection -> IO ()
-handle Node{..} Connection{..} = undefined
+handle Node{..} Connection{..} = go
   where
     go = do (output, input) <- readMVar broadcaster
-            let x = errorP (decodeMany (fromSocket sock 4096)) >-> P.map snd >-> toOutput output
+            let p = errorP (fromSocket sock 4096 ^. decoded)  >-> toOutput output
             return ()
 
 ackLen :: Int
