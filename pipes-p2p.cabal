@@ -34,7 +34,8 @@ library
                        pipes-binary >= 0.3,
                        pipes-concurrency,
                        pipes-network >= 0.6,
-                       lens-family
+                       lens-family,
+                       network
 
 source-repository head
     Type: git

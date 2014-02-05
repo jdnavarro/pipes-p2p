@@ -4,19 +4,24 @@
 {-# LANGUAGE NoMonomorphismRestriction #-}
 module Pipes.Network.P2P where
 
-import Control.Error
 import Control.Applicative ((<$>), (<*>), pure)
 import Control.Monad ((>=>), void, guard)
 import Control.Concurrent (forkIO)
-import Control.Concurrent.MVar
+import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
+import Data.Monoid ((<>))
 import GHC.Generics (Generic)
+
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import Data.ByteString.Lazy (toStrict, fromStrict)
 import qualified Data.Binary as Binary(encode,decode)
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Network.Socket (SockAddr(SockAddrInet), inet_ntoa)
+
+import Control.Error (MaybeT, runMaybeT, hoistMaybe)
 import Lens.Family2 ((^.))
+
 import Pipes
 import qualified Pipes.Prelude as P
 import Control.Monad.Trans.Error
@@ -34,6 +39,7 @@ import Pipes.Network.TCP
   ( HostPreference
   , HostName
   , ServiceName
+  , Socket
   , fromSocket
   , connect
   , send
@@ -41,7 +47,6 @@ import Pipes.Network.TCP
   , recv
   , fromSocket
   , toSocket
-  , Socket
   )
 
 type Mailbox = (Output Message, Input Message)
@@ -77,17 +82,17 @@ data Message = GETADDR
 instance Binary Message
 
 launch :: Node -> Address -> IO ()
-launch n@Node{..} addr = connectO n addr >>
+launch n@Node{..} addr = do
+    void . forkIO $ connectO n addr
     serve (hostPreference settings)
           (serviceName settings)
-          (connectI n . fst)
+          (uncurry $ connectI n)
 
 connectO :: Node -> Address -> IO ()
-connectO n@Node{..} addr@(Address hn sn) =
-    void . forkIO . connect hn sn $ \(sock, _) -> void . runMaybeT $ do
+connectO n@Node{..} addr@(Address hn sn) = do
+    connect hn sn $ \(sock, _) -> void . runMaybeT $ do
         -- handshake
         lift $ send sock (encode $ VER version)
-        let liftMaybe = lift >=> hoistMaybe
         ver <- liftMaybe $ recv sock verLen
         ack <- liftMaybe $ recv sock ackLen
         guard $ decode ver <= version
@@ -97,8 +102,24 @@ connectO n@Node{..} addr@(Address hn sn) =
                   modifyMVar_ connections $ pure . Map.insert addr sock
                   handle n sock
 
-connectI :: Node -> Socket -> IO ()
-connectI = undefined
+connectI :: Node -> Socket -> SockAddr -> IO ()
+connectI n@Node{..} sock sockAddr = void . runMaybeT $ do
+    ver <- liftMaybe $ recv sock verLen
+    guard $ decode ver <= version
+    lift . send sock $ encode (VER version) <> encode ACK
+    ack <- liftMaybe $ recv sock ackLen
+    guard $ decode ack == ACK
+
+    case sockAddr of
+        (SockAddrInet port host) -> lift $ do
+            hn <- inet_ntoa host
+            let addr = Address hn (show port)
+            modifyMVar_ connections $ pure . Map.insert addr sock
+            handle n sock
+        _ -> error "connectI: Only IPv4 is supported"
+
+liftMaybe :: Monad m => m (Maybe c) -> MaybeT m c
+liftMaybe = lift >=> hoistMaybe
 
 -- TODO: How to get rid of this?
 instance Error (DecodingError, Producer ByteString IO ())
