@@ -132,19 +132,22 @@ handle n@Node{..} sock addr = do
     void . forkIO . runEffect . void . runErrorP
          $ errorP (fromSocket sock 4096 ^. decoded) >-> toOutput outr
     void . forkIO . runEffect $ fromInput inbc >-> toOutput outr
-    runEffect $ fromInput inr >-> do
+    runEffect $ fromInput inr >-> forever (do
         msg <- await
         case msg of
-             ACK         -> return ()
-             GETADDR     -> do conns <- liftIO $ readMVar connections
-                               each (Map.keys conns) >-> P.map encode >-> toSocket sock
-             ADDR addr'  -> do conns <- liftIO $ readMVar connections
-                               if Map.member addr' conns
-                               then return ()
-                               else liftIO $ connectO n addr'
+             ACK -> return ()
+             GETADDR -> do
+                 conns <- liftIO $ readMVar connections
+                 each (Map.keys conns) >-> P.map encode >-> toSocket sock
+             ADDR addr'  -> do
+                 conns <- liftIO $ readMVar connections
+                 if Map.member addr' conns
+                 then return ()
+                 else liftIO $ connectO n addr'
              RELAY tid' addr' -> if tid' == tid
                                  then return ()
                                  else send sock (encode addr')
+        )
 
 ackLen :: Int
 ackLen = B.length $ encode ACK
