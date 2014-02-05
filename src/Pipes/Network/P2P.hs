@@ -5,8 +5,8 @@
 module Pipes.Network.P2P where
 
 import Control.Applicative ((<$>), (<*>), pure)
-import Control.Monad ((>=>), void, guard)
-import Control.Concurrent (forkIO)
+import Control.Monad ((>=>), void, guard, forever)
+import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
 import Data.Monoid ((<>))
 import GHC.Generics (Generic)
@@ -76,7 +76,7 @@ data Message = GETADDR
              | ADDR Address
              | VER Int
              | ACK
-             | RELAY Address
+             | RELAY String Address
                deriving (Show, Eq, Generic)
 
 instance Binary Message
@@ -126,7 +126,8 @@ handle :: Node -> Socket -> Address -> IO ()
 handle n@Node{..} sock addr = do
     modifyMVar_ connections $ pure . Map.insert addr sock
     (outbc, inbc) <- readMVar broadcaster
-    runEffect $ yield (RELAY addr) >-> toOutput outbc
+    tid <- show <$> myThreadId
+    runEffect $ yield (RELAY tid addr) >-> toOutput outbc
     (outr , inr ) <- spawn Unbounded
     void . forkIO . runEffect . void . runErrorP
          $ errorP (fromSocket sock 4096 ^. decoded) >-> toOutput outr
@@ -141,7 +142,9 @@ handle n@Node{..} sock addr = do
                                if Map.member addr' conns
                                then return ()
                                else liftIO $ connectO n addr'
-             RELAY addr' -> send sock (encode addr')
+             RELAY tid' addr' -> if tid' == tid
+                                 then return ()
+                                 else send sock (encode addr')
 
 ackLen :: Int
 ackLen = B.length $ encode ACK
