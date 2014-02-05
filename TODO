@@ -1,3 +1,5 @@
 - Use async to kill child threads when parent thread dies
-- Handle Decoding errors
+- Handle `Decoding` errors: it should ignore input and resume listening.
+- Handle socket IO exceptions: make sure connection is unregistered and child
+  threads exit properly.
 - Multiple seeds
