@@ -99,8 +99,7 @@ connectO n@Node{..} addr@(Address hn sn) = do
         guard $ decode ack == ACK
         -- Request addresses, register and handle incoming messages
         lift $ do send sock $ encode GETADDR
-                  modifyMVar_ connections $ pure . Map.insert addr sock
-                  handle n sock
+                  handle n sock addr
 
 connectI :: Node -> Socket -> SockAddr -> IO ()
 connectI n@Node{..} sock sockAddr = void . runMaybeT $ do
@@ -114,8 +113,7 @@ connectI n@Node{..} sock sockAddr = void . runMaybeT $ do
         (SockAddrInet port host) -> lift $ do
             hn <- inet_ntoa host
             let addr = Address hn (show port)
-            modifyMVar_ connections $ pure . Map.insert addr sock
-            handle n sock
+            handle n sock addr
         _ -> error "connectI: Only IPv4 is supported"
 
 liftMaybe :: Monad m => m (Maybe c) -> MaybeT m c
@@ -124,24 +122,26 @@ liftMaybe = lift >=> hoistMaybe
 -- TODO: How to get rid of this?
 instance Error (DecodingError, Producer ByteString IO ())
 
-handle :: Node -> Socket -> IO ()
-handle n@Node{..} sock = void . forkIO $ do
-    (_, inbc) <- readMVar broadcaster
-    (outr, inr) <- spawn Unbounded
+handle :: Node -> Socket -> Address -> IO ()
+handle n@Node{..} sock addr = do
+    modifyMVar_ connections $ pure . Map.insert addr sock
+    (outbc, inbc) <- readMVar broadcaster
+    runEffect $ yield (RELAY addr) >-> toOutput outbc
+    (outr , inr ) <- spawn Unbounded
     void . forkIO . runEffect . void . runErrorP
          $ errorP (fromSocket sock 4096 ^. decoded) >-> toOutput outr
     void . forkIO . runEffect $ fromInput inbc >-> toOutput outr
     runEffect $ fromInput inr >-> do
         msg <- await
         case msg of
-             ACK        -> return ()
-             GETADDR    -> do conns <- liftIO $ readMVar connections
-                              each (Map.keys conns) >-> P.map encode >-> toSocket sock
-             ADDR addr  -> do conns <- liftIO $ readMVar connections
-                              if Map.member addr conns
-                              then return ()
-                              else liftIO $ connectO n addr
-             RELAY addr -> send sock (encode addr) -- TODO: Guard against same connection relay
+             ACK         -> return ()
+             GETADDR     -> do conns <- liftIO $ readMVar connections
+                               each (Map.keys conns) >-> P.map encode >-> toSocket sock
+             ADDR addr'  -> do conns <- liftIO $ readMVar connections
+                               if Map.member addr' conns
+                               then return ()
+                               else liftIO $ connectO n addr'
+             RELAY addr' -> send sock (encode addr')
 
 ackLen :: Int
 ackLen = B.length $ encode ACK
