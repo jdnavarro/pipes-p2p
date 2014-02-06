@@ -25,7 +25,7 @@ import Pipes
 import qualified Pipes.Prelude as P
 import Control.Monad.Trans.Error
 import Pipes.Lift (errorP, runErrorP)
-import Pipes.Binary (Binary, decoded, DecodingError)
+import Pipes.Binary (Binary(put,get), decoded, DecodingError)
 import Pipes.Concurrent
   ( Buffer(Unbounded)
   , Output
@@ -40,9 +40,9 @@ import Pipes.Network.TCP
   , ServiceName
   , Socket
   , fromSocket
-  , connect
+  --, connect
   , send
-  , serve
+  -- , serve
   , recv
   , fromSocket
   , toSocket
@@ -51,69 +51,52 @@ import Pipes.Network.TCP
 type Mailbox = (Output Message, Input Message)
 
 data Node = Node
-    { settings    :: Settings
-    , connections :: MVar (Map Address Socket)
+    { address     :: SockAddr
+    , connections :: MVar (Map SockAddr Socket)
     , broadcaster :: MVar Mailbox
     }
 
-node :: Settings -> IO Node
-node settings = Node settings
-            <$> newMVar Map.empty
-            <*> (newMVar =<< spawn Unbounded)
+node :: SockAddr -> IO Node
+node addr = Node addr <$> newMVar Map.empty <*> (newMVar =<< spawn Unbounded)
 
-data Settings = Settings
-    { hostPreference :: HostPreference
-    , serviceName    :: ServiceName
-    } deriving (Show, Eq, Generic)
-
-data Address = Address HostName ServiceName
-               deriving (Show, Eq, Ord, Generic)
-
-instance Binary Address
+instance Binary SockAddr where
+    put = undefined
+    get = undefined
 
 data Message = GETADDR
-             | ADDR Address
+             | ADDR SockAddr
              | VER Int
              | ACK
-             | RELAY String Address
+             | RELAY String SockAddr
                deriving (Show, Eq, Generic)
 
 instance Binary Message
 
-launch :: Node -> Address -> IO ()
+launch :: Node -> SockAddr -> IO ()
 launch n@Node{..} addr = do
     void . forkIO $ connectO n addr
-    serve (hostPreference settings)
-          (serviceName settings)
-          (uncurry $ connectI n)
+    serve address (connectI n)
 
-connectO :: Node -> Address -> IO ()
-connectO n@Node{..} addr@(Address hn sn) = do
-    connect hn sn $ \(sock, _) -> void . runMaybeT $ do
-        -- handshake
-        lift $ send sock (encode $ VER version)
-        ver <- liftMaybe $ recv sock verLen
-        ack <- liftMaybe $ recv sock ackLen
-        guard $ decode ver <= version
-        guard $ decode ack == ACK
-        -- Request addresses, register and handle incoming messages
-        lift $ do send sock $ encode GETADDR
-                  handle n sock addr
+connectO :: Node -> SockAddr -> IO ()
+connectO n@Node{..} addr = void . runMaybeT $ do
+    sock <- liftIO $ newSocket addr
+    -- handshake
+    lift $ send sock (encode $ VER version)
+    ver <- liftMaybe $ recv sock verLen
+    ack <- liftMaybe $ recv sock ackLen
+    guard $ decode ver <= version
+    guard $ decode ack == ACK
+    -- Request addresses, register and handle incoming messages
+    lift $ do send sock $ encode GETADDR
+              handle n sock addr
 
-connectI :: Node -> Socket -> SockAddr -> IO ()
-connectI n@Node{..} sock sockAddr = void . runMaybeT $ do
+connectI :: Node -> Socket -> IO ()
+connectI n@Node{..} sock = void . runMaybeT $ do
     ver <- liftMaybe $ recv sock verLen
     guard $ decode ver <= version
     lift . send sock $ encode (VER version) <> encode ACK
     ack <- liftMaybe $ recv sock ackLen
     guard $ decode ack == ACK
-
-    case sockAddr of
-        (SockAddrInet port host) -> lift $ do
-            hn <- inet_ntoa host
-            let addr = Address hn (show port)
-            handle n sock addr
-        _ -> error "connectI: Only IPv4 is supported"
 
 liftMaybe :: Monad m => m (Maybe c) -> MaybeT m c
 liftMaybe = lift >=> hoistMaybe
@@ -121,7 +104,7 @@ liftMaybe = lift >=> hoistMaybe
 -- TODO: How to get rid of this?
 instance Error (DecodingError, Producer ByteString IO ())
 
-handle :: Node -> Socket -> Address -> IO ()
+handle :: Node -> Socket -> SockAddr -> IO ()
 handle n@Node{..} sock addr = do
     modifyMVar_ connections $ pure . Map.insert addr sock
     (outbc, inbc) <- readMVar broadcaster
@@ -162,3 +145,9 @@ encode = toStrict . Binary.encode
 
 decode :: Binary a => ByteString -> a
 decode = Binary.decode . fromStrict
+
+newSocket :: SockAddr -> IO Socket
+newSocket = undefined
+
+serve :: SockAddr -> (Socket -> IO ()) -> IO ()
+serve = undefined
