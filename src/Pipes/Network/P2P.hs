@@ -17,9 +17,9 @@ import Data.ByteString.Lazy (toStrict, fromStrict)
 import qualified Data.Binary as Binary(encode,decode)
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Network.Socket (SockAddr(SockAddrInet), inet_ntoa)
+import Network.Socket (SockAddr, Socket)
+import Network.Socket.ByteString (sendAll, recv)
 
-import Control.Error (MaybeT, runMaybeT, hoistMaybe)
 import Lens.Family2 ((^.))
 
 import Pipes
@@ -36,16 +36,7 @@ import Pipes.Concurrent
   , fromInput
   )
 import Pipes.Network.TCP
-  ( HostPreference
-  , HostName
-  , ServiceName
-  , Socket
-  , fromSocket
-  --, connect
-  , send
-  -- , serve
-  , recv
-  , fromSocket
+  ( fromSocket
   , toSocket
   )
 
@@ -79,28 +70,27 @@ launch n@Node{..} addr = do
     serve address (connectI n)
 
 connectO :: Node -> SockAddr -> IO ()
-connectO n@Node{..} addr = void . runMaybeT $ do
+connectO n@Node{..} addr = void $ do
     sock <- liftIO $ newSocket addr
     -- handshake
-    lift $ send sock (encode $ ME address)
-    oaddr <- liftMaybe $ recv sock len
-    ack <- liftMaybe $ recv sock ackLen
+    sendAll sock (encode $ ME address)
+    len <- recv sock 1
+    oaddr <- recv sock (decode len)
+    ack <- recv sock ackLen
     guard $ decode oaddr == addr
     guard $ decode ack == ACK
     -- Request addresses, register and handle incoming messages
-    lift $ do send sock $ encode GETADDR
-              handle n sock addr
+    sendAll sock $ encode GETADDR
+    handle n sock addr
 
 connectI :: Node -> SockAddr -> Socket -> IO ()
-connectI n@Node{..} addr sock = void . runMaybeT $ do
-    oaddr <- liftMaybe $ recv sock len
+connectI Node{..} addr sock = void $ do
+    len <- recv sock 1
+    oaddr <- recv sock (decode len)
     guard $ decode oaddr == addr
-    lift . send sock $ encode (ME address) <> encode ACK
-    ack <- liftMaybe $ recv sock ackLen
+    sendAll sock $ encode (ME address) <> encode ACK
+    ack <- recv sock ackLen
     guard $ decode ack == ACK
-
-liftMaybe :: Monad m => m (Maybe c) -> MaybeT m c
-liftMaybe = lift >=> hoistMaybe
 
 -- TODO: How to get rid of this?
 instance Error (DecodingError, Producer ByteString IO ())
@@ -129,14 +119,11 @@ handle n@Node{..} sock addr = do
                  else liftIO $ connectO n addr'
              RELAY tid' addr' -> if tid' == tid
                                  then return ()
-                                 else send sock (encode addr')
+                                 else liftIO $ sendAll sock (encode addr')
         )
 
 ackLen :: Int
 ackLen = B.length $ encode ACK
-
-len :: Int
-len = B.length $ encode (1 :: Word8)
 
 encode :: Binary a => a -> ByteString
 encode = toStrict . Binary.encode
