@@ -4,17 +4,14 @@
 module Pipes.Network.P2P where
 
 import Control.Applicative ((<$>), (<*>), pure)
-import Control.Monad ((>=>), void, guard, forever)
+import Control.Monad (void, guard, forever)
 import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
 import Data.Monoid ((<>))
 import GHC.Generics (Generic)
-import Data.Word (Word8)
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
-import Data.ByteString.Lazy (toStrict, fromStrict)
-import qualified Data.Binary as Binary(encode,decode)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Network.Socket (SockAddr, Socket)
@@ -26,7 +23,7 @@ import Pipes
 import qualified Pipes.Prelude as P
 import Control.Monad.Trans.Error
 import Pipes.Lift (errorP, runErrorP)
-import Pipes.Binary (Binary(put,get), decoded, DecodingError)
+import Pipes.Binary (Binary, decoded, DecodingError)
 import Pipes.Concurrent
   ( Buffer(Unbounded)
   , Output
@@ -40,6 +37,8 @@ import Pipes.Network.TCP
   , toSocket
   )
 
+import Pipes.Network.Internal
+
 type Mailbox = (Output Message, Input Message)
 
 data Node = Node
@@ -50,10 +49,6 @@ data Node = Node
 
 node :: SockAddr -> IO Node
 node addr = Node addr <$> newMVar Map.empty <*> (newMVar =<< spawn Unbounded)
-
-instance Binary SockAddr where
-    put = undefined
-    get = undefined
 
 data Message = GETADDR
              | ADDR SockAddr
@@ -124,15 +119,3 @@ handle n@Node{..} sock addr = do
 
 ackLen :: Int
 ackLen = B.length $ encode ACK
-
-encode :: Binary a => a -> ByteString
-encode = toStrict . Binary.encode
-
-decode :: Binary a => ByteString -> a
-decode = Binary.decode . fromStrict
-
-newSocket :: SockAddr -> IO Socket
-newSocket = undefined
-
-serve :: SockAddr -> (SockAddr -> Socket -> IO ()) -> IO ()
-serve = undefined
