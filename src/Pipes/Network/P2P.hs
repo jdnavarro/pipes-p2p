@@ -9,6 +9,7 @@ import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
 import Data.Monoid ((<>))
 import GHC.Generics (Generic)
+import Data.Word (Word8)
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
@@ -65,7 +66,7 @@ instance Binary SockAddr where
 
 data Message = GETADDR
              | ADDR SockAddr
-             | VER Int
+             | ME SockAddr
              | ACK
              | RELAY String SockAddr
                deriving (Show, Eq, Generic)
@@ -81,20 +82,20 @@ connectO :: Node -> SockAddr -> IO ()
 connectO n@Node{..} addr = void . runMaybeT $ do
     sock <- liftIO $ newSocket addr
     -- handshake
-    lift $ send sock (encode $ VER version)
-    ver <- liftMaybe $ recv sock verLen
+    lift $ send sock (encode $ ME address)
+    oaddr <- liftMaybe $ recv sock len
     ack <- liftMaybe $ recv sock ackLen
-    guard $ decode ver <= version
+    guard $ decode oaddr == addr
     guard $ decode ack == ACK
     -- Request addresses, register and handle incoming messages
     lift $ do send sock $ encode GETADDR
               handle n sock addr
 
-connectI :: Node -> Socket -> IO ()
-connectI n@Node{..} sock = void . runMaybeT $ do
-    ver <- liftMaybe $ recv sock verLen
-    guard $ decode ver <= version
-    lift . send sock $ encode (VER version) <> encode ACK
+connectI :: Node -> SockAddr -> Socket -> IO ()
+connectI n@Node{..} addr sock = void . runMaybeT $ do
+    oaddr <- liftMaybe $ recv sock len
+    guard $ decode oaddr == addr
+    lift . send sock $ encode (ME address) <> encode ACK
     ack <- liftMaybe $ recv sock ackLen
     guard $ decode ack == ACK
 
@@ -134,11 +135,8 @@ handle n@Node{..} sock addr = do
 ackLen :: Int
 ackLen = B.length $ encode ACK
 
-verLen :: Int
-verLen = B.length $ encode version
-
-version :: Int
-version = 2
+len :: Int
+len = B.length $ encode (1 :: Word8)
 
 encode :: Binary a => a -> ByteString
 encode = toStrict . Binary.encode
@@ -149,5 +147,5 @@ decode = Binary.decode . fromStrict
 newSocket :: SockAddr -> IO Socket
 newSocket = undefined
 
-serve :: SockAddr -> (Socket -> IO ()) -> IO ()
+serve :: SockAddr -> (SockAddr -> Socket -> IO ()) -> IO ()
 serve = undefined
