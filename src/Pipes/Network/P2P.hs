@@ -88,9 +88,9 @@ connectO n@Node{..} addr sock = void $ do
 connectI :: Node -> SockAddr -> Socket -> IO ()
 connectI Node{..} addr sock = void $ do
     len <- recv sock 1
-    oaddr <- recv sock (decode len)
-    guard $ decode oaddr == addr
-    send sock $ encode (ME address) <> encode ACK
+    send sock $ encode (ME address, ACK)
+    _ <- recv sock (decode len)
+    -- guard $ decode oaddr == addr
     ack <- recv sock ackLen
     guard $ decode ack == ACK
 
