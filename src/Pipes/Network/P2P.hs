@@ -108,7 +108,6 @@ handle n@Node{..} sock addr = do
     runEffect $ fromInput inr >-> forever (do
         msg <- await
         case msg of
-             ACK -> return ()
              GETADDR -> do
                  conns <- liftIO $ readMVar connections
                  each (Map.keys conns) >-> P.map encode >-> toSocket sock
@@ -120,6 +119,7 @@ handle n@Node{..} sock addr = do
              RELAY tid' addr' -> if tid' == tid
                                  then return ()
                                  else liftIO $ send sock (encode addr')
+             _ -> return ()
         )
 
 ackLen :: Int
