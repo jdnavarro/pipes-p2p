@@ -34,7 +34,8 @@ library
                        pipes-concurrency,
                        pipes-network >= 0.6,
                        lens-family,
-                       network
+                       network,
+                       network-simple-sockaddr
 
 source-repository head
     Type: git

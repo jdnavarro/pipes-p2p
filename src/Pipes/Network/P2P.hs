@@ -14,8 +14,6 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import Data.Map (Map)
 import qualified Data.Map as Map
-import Network.Socket (SockAddr, Socket)
-import Network.Socket.ByteString (sendAll, recv)
 
 import Lens.Family2 ((^.))
 
@@ -35,6 +33,14 @@ import Pipes.Concurrent
 import Pipes.Network.TCP
   ( fromSocket
   , toSocket
+  )
+import Network.Simple.SockAddr
+  ( Socket
+  , SockAddr
+  , serve
+  , connectFork
+  , send
+  , recv
   )
 
 import Pipes.Network.Internal
@@ -61,21 +67,20 @@ instance Binary Message
 
 launch :: Node -> SockAddr -> IO ()
 launch n@Node{..} addr = do
-    void . forkIO $ connectO n addr
-    serve address (connectI n)
+    void $ connectFork addr (connectO n addr)
+    serve address (connectI n address)
 
-connectO :: Node -> SockAddr -> IO ()
-connectO n@Node{..} addr = void $ do
-    sock <- liftIO $ newSocket addr
+connectO :: Node -> SockAddr -> Socket -> IO ()
+connectO n@Node{..} addr sock = void $ do
     -- handshake
-    sendAll sock (encode $ ME address)
+    send sock (encode $ ME address)
     len <- recv sock 1
     oaddr <- recv sock (decode len)
     ack <- recv sock ackLen
     guard $ decode oaddr == addr
     guard $ decode ack == ACK
     -- Request addresses, register and handle incoming messages
-    sendAll sock $ encode GETADDR
+    send sock $ encode GETADDR
     handle n sock addr
 
 connectI :: Node -> SockAddr -> Socket -> IO ()
@@ -83,7 +88,7 @@ connectI Node{..} addr sock = void $ do
     len <- recv sock 1
     oaddr <- recv sock (decode len)
     guard $ decode oaddr == addr
-    sendAll sock $ encode (ME address) <> encode ACK
+    send sock $ encode (ME address) <> encode ACK
     ack <- recv sock ackLen
     guard $ decode ack == ACK
 
@@ -111,10 +116,10 @@ handle n@Node{..} sock addr = do
                  conns <- liftIO $ readMVar connections
                  if Map.member addr' conns
                  then return ()
-                 else liftIO $ connectO n addr'
+                 else liftIO . void $ connectFork addr' (connectO n addr')
              RELAY tid' addr' -> if tid' == tid
                                  then return ()
-                                 else liftIO $ sendAll sock (encode addr')
+                                 else liftIO $ send sock (encode addr')
         )
 
 ackLen :: Int
