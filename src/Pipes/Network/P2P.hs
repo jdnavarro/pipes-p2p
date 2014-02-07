@@ -6,7 +6,7 @@ module Pipes.Network.P2P where
 
 import Control.Applicative ((<$>), (<*>), pure)
 import Control.Monad (void, guard, forever)
-import Control.Concurrent (forkIO, myThreadId)
+import Control.Concurrent (ThreadId, forkIO, myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
 import Data.Monoid ((<>))
 import GHC.Generics (Generic)
@@ -47,7 +47,7 @@ import Network.Simple.SockAddr
 
 import Pipes.Network.Internal
 
-type Mailbox = (Output Message, Input Message)
+type Mailbox = (Output Relay, Input Relay)
 
 data Node = Node
     { address     :: SockAddr
@@ -62,8 +62,9 @@ data Message = GETADDR
              | ADDR SockAddr
              | ME SockAddr
              | ACK
-             | RELAY String SockAddr
                deriving (Show, Eq, Generic)
+
+data Relay = Relay ThreadId SockAddr
 
 instance Binary Message
 
@@ -104,23 +105,26 @@ handle n@Node{..} sock addr =
     flip finally (modifyMVar_ connections (pure . Map.delete addr)) $ do
         modifyMVar_ connections $ pure . Map.insert addr sock
         (outbc, inbc) <- readMVar broadcaster
-        tid <- show <$> myThreadId
-        runEffect $ yield (RELAY tid addr) >-> toOutput outbc
-        (outr , inr ) <- spawn Unbounded
+        tid <- myThreadId
+        runEffect $ yield (Relay tid addr) >-> toOutput outbc
+        (outr, inr) <- spawn Unbounded
         void . forkIO . runEffect . void . runErrorP
-             $ errorP (fromSocket sock 4096 ^. decoded) >-> toOutput outr
-        void . forkIO . runEffect $ fromInput inbc >-> toOutput outr
+             $ errorP (fromSocket sock 4096 ^. decoded)
+           >-> P.map Right >-> toOutput outr
+        void . forkIO . runEffect
+             $ fromInput inbc
+           >-> P.map Left >-> toOutput outr
         runEffect $ fromInput inr >-> forever (
             await >>= \case
-                GETADDR -> do
+                Right GETADDR -> do
                     conns <- liftIO $ readMVar connections
                     each (Map.keys conns) >-> P.map encode >-> toSocket sock
-                ADDR addr'  -> do
+                Right (ADDR addr') -> do
                     conns <- liftIO $ readMVar connections
                     if Map.member addr' conns
                     then return ()
                     else liftIO . void . connectFork addr' $ outgoing n addr'
-                RELAY tid' addr' -> if tid' == tid
+                Left (Relay tid' addr') -> if tid' == tid
                                     then return ()
                                     else liftIO . send sock $ encode addr'
                 _ -> return ()
