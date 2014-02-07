@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NamedFieldPuns, RecordWildCards #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 module Pipes.Network.P2P where
 
 import Control.Applicative ((<$>), (<*>), pure)
@@ -9,6 +10,7 @@ import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
 import Data.Monoid ((<>))
 import GHC.Generics (Generic)
+import Control.Exception (finally)
 
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
@@ -96,31 +98,32 @@ connectI Node{..} addr sock = void $ do
 instance Error (DecodingError, Producer ByteString IO ())
 
 handle :: Node -> Socket -> SockAddr -> IO ()
-handle n@Node{..} sock addr = do
-    modifyMVar_ connections $ pure . Map.insert addr sock
-    (outbc, inbc) <- readMVar broadcaster
-    tid <- show <$> myThreadId
-    runEffect $ yield (RELAY tid addr) >-> toOutput outbc
-    (outr , inr ) <- spawn Unbounded
-    void . forkIO . runEffect . void . runErrorP
-         $ errorP (fromSocket sock 4096 ^. decoded) >-> toOutput outr
-    void . forkIO . runEffect $ fromInput inbc >-> toOutput outr
-    runEffect $ fromInput inr >-> forever (do
-        msg <- await
-        case msg of
-             GETADDR -> do
-                 conns <- liftIO $ readMVar connections
-                 each (Map.keys conns) >-> P.map encode >-> toSocket sock
-             ADDR addr'  -> do
-                 conns <- liftIO $ readMVar connections
-                 if Map.member addr' conns
-                 then return ()
-                 else liftIO . void $ connectFork addr' (connectO n addr')
-             RELAY tid' addr' -> if tid' == tid
-                                 then return ()
-                                 else liftIO $ send sock (encode addr')
-             _ -> return ()
-        )
+handle n@Node{..} sock addr =
+  -- TODO: Issues with async exceptions?
+    flip finally (modifyMVar_ connections (pure . Map.delete addr)) $ do
+        modifyMVar_ connections $ pure . Map.insert addr sock
+        (outbc, inbc) <- readMVar broadcaster
+        tid <- show <$> myThreadId
+        runEffect $ yield (RELAY tid addr) >-> toOutput outbc
+        (outr , inr ) <- spawn Unbounded
+        void . forkIO . runEffect . void . runErrorP
+             $ errorP (fromSocket sock 4096 ^. decoded) >-> toOutput outr
+        void . forkIO . runEffect $ fromInput inbc >-> toOutput outr
+        runEffect $ fromInput inr >-> forever (
+            await >>= \case
+                GETADDR -> do
+                    conns <- liftIO $ readMVar connections
+                    each (Map.keys conns) >-> P.map encode >-> toSocket sock
+                ADDR addr'  -> do
+                    conns <- liftIO $ readMVar connections
+                    if Map.member addr' conns
+                    then return ()
+                    else liftIO . void $ connectFork addr' (connectO n addr')
+                RELAY tid' addr' -> if tid' == tid
+                                    then return ()
+                                    else liftIO $ send sock (encode addr')
+                _ -> return ()
+         )
 
 ackLen :: Int
 ackLen = B.length $ encode ACK
