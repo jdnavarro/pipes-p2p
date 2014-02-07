@@ -69,11 +69,11 @@ instance Binary Message
 
 launch :: Node -> SockAddr -> IO ()
 launch n@Node{..} addr = do
-    void $ connectFork addr (connectO n addr)
-    serve address (connectI n address)
+    void $ connectFork addr (outgoing n addr)
+    serve address (incoming n address)
 
-connectO :: Node -> SockAddr -> Socket -> IO ()
-connectO n@Node{..} addr sock = void $ do
+outgoing :: Node -> SockAddr -> Socket -> IO ()
+outgoing n@Node{..} addr sock = void $ do
     -- handshake
     send sock (encode $ ME address)
     len <- recv sock 1
@@ -85,14 +85,15 @@ connectO n@Node{..} addr sock = void $ do
     send sock $ encode GETADDR
     handle n sock addr
 
-connectI :: Node -> SockAddr -> Socket -> IO ()
-connectI Node{..} addr sock = void $ do
+incoming :: Node -> SockAddr -> Socket -> IO ()
+incoming n@Node{..} addr sock = void $ do
     len <- recv sock 1
     send sock $ encode (ME address, ACK)
     _ <- recv sock (decode len)
     -- guard $ decode oaddr == addr
     ack <- recv sock ackLen
     guard $ decode ack == ACK
+    handle n sock addr
 
 -- TODO: How to get rid of this?
 instance Error (DecodingError, Producer ByteString IO ())
@@ -118,10 +119,10 @@ handle n@Node{..} sock addr =
                     conns <- liftIO $ readMVar connections
                     if Map.member addr' conns
                     then return ()
-                    else liftIO . void $ connectFork addr' (connectO n addr')
+                    else liftIO . void . connectFork addr' $ outgoing n addr'
                 RELAY tid' addr' -> if tid' == tid
                                     then return ()
-                                    else liftIO $ send sock (encode addr')
+                                    else liftIO . send sock $ encode addr'
                 _ -> return ()
          )
 
