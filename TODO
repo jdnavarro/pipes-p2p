@@ -1,4 +1,3 @@
-- Use async to kill child threads when parent thread dies
 - Handle `Decoding` errors: it should ignore input and resume listening.
 - Multiple seeds
-- Registered connections should include listening port only.
+- In incoming connection check advertised address replies to ping.
