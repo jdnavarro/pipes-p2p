@@ -20,7 +20,7 @@ instance Binary SockAddr where
     get = getWord8 >>= \case
               0 -> SockAddrInet <$> PortNum <$> get <*> get
               1 -> SockAddrInet6 <$> PortNum <$> get <*> get <*> get <*> get
-              2 -> SockAddrUnix <$> get
+              _ -> SockAddrUnix <$> get
 
 encode :: Binary a => a -> ByteString
 encode = toStrict . Binary.encode

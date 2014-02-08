@@ -74,7 +74,7 @@ instance Binary Message
 launch :: Node -> [SockAddr] -> IO ()
 launch n@Node{..} addrs = do
     for_ addrs $ \a -> connectFork a $ outgoing n a
-    serve address (incoming n address)
+    serve address $ incoming n address
 
 outgoing :: Node -> SockAddr -> Socket -> IO ()
 outgoing n@Node{..} addr sock = void $ do
@@ -110,7 +110,7 @@ handle n@Node{..} sock addr =
         let (outbc, inbc) = broadcaster
 
         tid <- myThreadId
-        atomically . Pipes.Concurrent.send outbc $ Relay tid addr
+        void . atomically . Pipes.Concurrent.send outbc $ Relay tid addr
 
         (outr, inr) <- spawn Unbounded
         let socketReader = runEffect . void . runErrorP
