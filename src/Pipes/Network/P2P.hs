@@ -8,7 +8,6 @@ import Control.Applicative ((<$>), (<*>), pure)
 import Control.Monad (void, guard, forever)
 import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
-import Data.Monoid ((<>))
 import GHC.Generics (Generic)
 import Control.Exception (finally)
 
@@ -25,6 +24,7 @@ import qualified Pipes.Prelude as P
 import Control.Monad.Trans.Error
 import Pipes.Lift (errorP, runErrorP)
 import Pipes.Binary (Binary, decoded, DecodingError)
+import qualified Pipes.Concurrent
 import Pipes.Concurrent
   ( Buffer(Unbounded)
   , Output
@@ -32,6 +32,7 @@ import Pipes.Concurrent
   , spawn
   , toOutput
   , fromInput
+  , atomically
   )
 import Pipes.Network.TCP
   ( fromSocket
@@ -108,7 +109,7 @@ handle n@Node{..} sock addr =
         (outbc, inbc) <- readMVar broadcaster
 
         tid <- myThreadId
-        runEffect $ yield (Relay tid addr) >-> toOutput outbc
+        atomically . Pipes.Concurrent.send outbc $ Relay tid addr
 
         (outr, inr) <- spawn Unbounded
         let socketReader = runEffect . void . runErrorP
