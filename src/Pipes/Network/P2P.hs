@@ -54,11 +54,11 @@ type Mailbox = (Output Relay, Input Relay)
 data Node = Node
     { address     :: SockAddr
     , connections :: MVar (Map SockAddr Socket)
-    , broadcaster :: MVar Mailbox
+    , broadcaster :: Mailbox
     }
 
 node :: SockAddr -> IO Node
-node addr = Node addr <$> newMVar Map.empty <*> (newMVar =<< spawn Unbounded)
+node addr = Node addr <$> newMVar Map.empty <*> spawn Unbounded
 
 data Message = GETADDR
              | ADDR SockAddr
@@ -106,7 +106,7 @@ handle n@Node{..} sock addr =
   -- TODO: Make sure no issues with async exceptions
     flip finally (modifyMVar_ connections (pure . Map.delete addr)) $ do
         modifyMVar_ connections $ pure . Map.insert addr sock
-        (outbc, inbc) <- readMVar broadcaster
+        let (outbc, inbc) = broadcaster
 
         tid <- myThreadId
         atomically . Pipes.Concurrent.send outbc $ Relay tid addr
