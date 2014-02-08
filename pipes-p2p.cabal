@@ -23,7 +23,7 @@ library
   default-language:    Haskell2010
   ghc-options:         -Wall
   build-depends:       base >=4.6 && <4.7,
-                       -- async,
+                       async,
                        binary,
                        transformers,
                        bytestring,

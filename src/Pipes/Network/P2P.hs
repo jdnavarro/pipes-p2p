@@ -6,12 +6,13 @@ module Pipes.Network.P2P where
 
 import Control.Applicative ((<$>), (<*>), pure)
 import Control.Monad (void, guard, forever)
-import Control.Concurrent (ThreadId, forkIO, myThreadId)
+import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
 import Data.Monoid ((<>))
 import GHC.Generics (Generic)
 import Control.Exception (finally)
 
+import Control.Concurrent.Async (concurrently)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import Data.Map (Map)
@@ -101,19 +102,22 @@ instance Error (DecodingError, Producer ByteString IO ())
 
 handle :: Node -> Socket -> SockAddr -> IO ()
 handle n@Node{..} sock addr =
-  -- TODO: Issues with async exceptions?
+  -- TODO: Make sure no issues with async exceptions
     flip finally (modifyMVar_ connections (pure . Map.delete addr)) $ do
         modifyMVar_ connections $ pure . Map.insert addr sock
         (outbc, inbc) <- readMVar broadcaster
+
         tid <- myThreadId
         runEffect $ yield (Relay tid addr) >-> toOutput outbc
+
         (outr, inr) <- spawn Unbounded
-        void . forkIO . runEffect . void . runErrorP
-             $ errorP (fromSocket sock 4096 ^. decoded)
-           >-> P.map Right >-> toOutput outr
-        void . forkIO . runEffect
-             $ fromInput inbc
-           >-> P.map Left >-> toOutput outr
+        let socketReader = runEffect . void . runErrorP
+                         $ errorP (fromSocket sock 4096 ^. decoded)
+                       >-> P.map Right >-> toOutput outr
+            broadcastReader = runEffect $ fromInput inbc
+                          >-> P.map Left >-> toOutput outr
+        void $ concurrently socketReader broadcastReader
+
         runEffect $ fromInput inr >-> forever (
             await >>= \case
                 Right GETADDR -> do
@@ -129,6 +133,7 @@ handle n@Node{..} sock addr =
                                     else liftIO . send sock $ encode addr'
                 _ -> return ()
          )
+
 
 ackLen :: Int
 ackLen = B.length $ encode ACK
