@@ -1,3 +1,2 @@
 - Handle `Decoding` errors: it should ignore input and resume listening.
-- Multiple seeds
 - In incoming connection check advertised address replies to ping.

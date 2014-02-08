@@ -10,6 +10,7 @@ import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
 import GHC.Generics (Generic)
 import Control.Exception (finally)
+import Data.Foldable (for_)
 
 import Control.Concurrent.Async (concurrently)
 import Data.ByteString (ByteString)
@@ -70,9 +71,9 @@ data Relay = Relay ThreadId SockAddr
 
 instance Binary Message
 
-launch :: Node -> SockAddr -> IO ()
-launch n@Node{..} addr = do
-    void $ connectFork addr (outgoing n addr)
+launch :: Node -> [SockAddr] -> IO ()
+launch n@Node{..} addrs = do
+    for_ addrs $ \a -> connectFork a $ outgoing n a
     serve address (incoming n address)
 
 outgoing :: Node -> SockAddr -> Socket -> IO ()
