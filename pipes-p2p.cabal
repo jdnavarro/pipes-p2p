@@ -13,8 +13,8 @@ author:              Danny Navarro
 maintainer:          j@dannynavarro.net
 category:            Network, Pipes
 build-type:          Simple
--- extra-source-files:  
 cabal-version:       >=1.10
+extra-source-files:  examples/demo.hs
 
 library
   exposed-modules:     Pipes.Network.P2P
