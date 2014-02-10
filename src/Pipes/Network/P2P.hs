@@ -74,7 +74,7 @@ instance Binary Message
 launch :: Node -> [SockAddr] -> IO ()
 launch n@Node{..} addrs = do
     for_ addrs $ \a -> connectFork a $ outgoing n a
-    serve address $ incoming n address
+    serve address $ incoming n
 
 outgoing :: Node -> SockAddr -> Socket -> IO ()
 outgoing n@Node{..} addr sock = void $ do
