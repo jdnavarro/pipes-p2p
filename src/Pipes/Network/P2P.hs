@@ -80,20 +80,17 @@ outgoing :: Node -> SockAddr -> Socket -> IO ()
 outgoing n@Node{..} addr sock = void $ do
     -- handshake
     send sock (encode $ ME address)
-    len <- recv sock 1
-    oaddr <- recv sock (decode len)
+    oaddr <- recv sock (B.length $ encode addr)
     ack <- recv sock ackLen
     guard $ decode oaddr == addr
     guard $ decode ack == ACK
-    -- Request addresses, register and handle incoming messages
     send sock $ encode GETADDR
     handle n sock addr
 
 incoming :: Node -> SockAddr -> Socket -> IO ()
 incoming n@Node{..} addr sock = void $ do
-    len <- recv sock 1
+    _oaddr <- recv sock (B.length $ encode addr)
     send sock $ encode (ME address, ACK)
-    _ <- recv sock (decode len)
     -- guard $ decode oaddr == addr
     ack <- recv sock ackLen
     guard $ decode ack == ACK
