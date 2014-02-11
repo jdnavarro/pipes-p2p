@@ -6,6 +6,7 @@ module Pipes.Network.P2P where
 
 import Control.Applicative ((<$>), (<*>), pure)
 import Control.Monad (void, guard, forever)
+import Data.Monoid ((<>))
 import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
 import GHC.Generics (Generic)
@@ -61,15 +62,30 @@ data Node = Node
 node :: SockAddr -> IO Node
 node addr = Node addr <$> newMVar Map.empty <*> spawn Unbounded
 
-data Message = GETADDR
+data Header = Header Int Int deriving (Show, Generic)
+
+instance Binary Header
+
+headerSize = B.length . encode $ Header 0 0
+
+data Payload = GETADDR
              | ADDR SockAddr
              | ME SockAddr
              | ACK
                deriving (Show, Eq, Generic)
 
-data Relay = Relay ThreadId SockAddr
+instance Binary Payload
+
+data Message = Message Header Payload deriving (Show, Generic)
 
 instance Binary Message
+
+serialize :: Payload -> ByteString
+serialize payload = encode (Header magic $ B.length bs) <> bs
+  where
+    bs = encode payload
+
+data Relay = Relay ThreadId SockAddr
 
 launch :: Node -> [SockAddr] -> IO ()
 launch n@Node{..} addrs = do
@@ -78,22 +94,36 @@ launch n@Node{..} addrs = do
 
 outgoing :: Node -> SockAddr -> Socket -> IO ()
 outgoing n@Node{..} addr sock = void $ do
-    -- handshake
-    send sock (encode $ ME address)
-    oaddr <- recv sock (B.length $ encode addr)
-    ack <- recv sock ackLen
-    guard $ decode oaddr == addr
+    send sock . serialize $ ME address
+
+    headerBS <- recv sock headerSize
+    let (Header _ nbytes) = decode headerBS
+    oaddrBS <- recv sock nbytes
+    guard $ decode oaddrBS == addr
+    send sock $ encode ACK
+
+    headerBS' <- recv sock headerSize
+    let (Header _ nbytes') = decode headerBS'
+    ack <- recv sock nbytes'
     guard $ decode ack == ACK
+
     send sock $ encode GETADDR
+
     handle n sock addr
 
 incoming :: Node -> SockAddr -> Socket -> IO ()
 incoming n@Node{..} addr sock = void $ do
-    _oaddr <- recv sock (B.length $ encode addr)
-    send sock $ encode (ME address, ACK)
-    -- guard $ decode oaddr == addr
-    ack <- recv sock ackLen
+    headerBS <- recv sock headerSize
+    let (Header _ nbytes) = decode headerBS
+    _oaddrBS <- recv sock nbytes
+    send sock . serialize $ ME address
+    send sock $ encode ACK
+
+    headerBS' <- recv sock headerSize
+    let (Header _ nbytes') = decode headerBS'
+    ack <- recv sock nbytes'
     guard $ decode ack == ACK
+
     handle n sock addr
 
 -- TODO: How to get rid of this?
@@ -133,6 +163,4 @@ handle n@Node{..} sock addr =
                 _ -> return ()
          )
 
-
-ackLen :: Int
-ackLen = B.length $ encode ACK
+magic = 26513
