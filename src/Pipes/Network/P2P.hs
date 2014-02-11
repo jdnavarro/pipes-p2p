@@ -4,7 +4,7 @@
 module Pipes.Network.P2P where
 
 import Control.Applicative ((<$>), (<*>), pure)
-import Control.Monad (void, guard, forever)
+import Control.Monad (void, guard, forever, when, unless)
 import Control.Concurrent (myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
 import Control.Exception (finally)
@@ -65,7 +65,7 @@ launch n@Node{..} addrs = do
     serve (getSockAddr address) $ incoming n
 
 outgoing :: Node -> SockAddr -> Socket -> IO ()
-outgoing n@Node{..} addr sock = void $ do
+outgoing n@Node{..} addr sock = do
     send sock . serialize magic $ ME address
 
     headerBS <- recv sock hSize
@@ -84,7 +84,7 @@ outgoing n@Node{..} addr sock = void $ do
     handle n sock addr
 
 incoming :: Node -> SockAddr -> Socket -> IO ()
-incoming n@Node{..} addr sock = void $ do
+incoming n@Node{..} addr sock = do
     headerBS <- recv sock hSize
     let (Header _ nbytes) = decode headerBS
     _oaddrBS <- recv sock nbytes
@@ -126,11 +126,8 @@ handle n@Node{..} sock addr =
                     each (Map.keys conns) >-> P.map encode >-> toSocket sock
                 Right (ADDR (Addr addr')) -> do
                     conns <- liftIO $ readMVar connections
-                    if Map.member (Addr addr') conns
-                    then return ()
-                    else liftIO . void . connectFork addr' $ outgoing n addr'
-                Left (Relay tid' addr') -> if tid' == tid
-                                    then return ()
-                                    else liftIO . send sock $ encode (Addr addr')
-                _ -> return ()
-         )
+                    when (Map.member (Addr addr') conns)
+                         (liftIO . void . connectFork addr' $ outgoing n addr')
+                Left (Relay tid' addr') -> unless
+                    (tid' == tid) (liftIO . send sock $ encode (Addr addr'))
+                _ -> return ())
