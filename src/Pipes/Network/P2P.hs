@@ -51,18 +51,18 @@ type Mailbox = (Output Relay, Input Relay)
 
 data Node = Node
     { magic       :: Int
-    , address     :: SockAddr
-    , connections :: MVar (Map SockAddr Socket)
+    , address     :: Address
+    , connections :: MVar (Map Address Socket)
     , broadcaster :: Mailbox
     }
 
 node :: SockAddr -> IO Node
-node addr = Node 26513 addr <$> newMVar Map.empty <*> spawn Unbounded
+node addr = Node 26513 (Addr addr) <$> newMVar Map.empty <*> spawn Unbounded
 
 launch :: Node -> [SockAddr] -> IO ()
 launch n@Node{..} addrs = do
     for_ addrs $ \a -> connectFork a $ outgoing n a
-    serve address $ incoming n
+    serve (getSockAddr address) $ incoming n
 
 outgoing :: Node -> SockAddr -> Socket -> IO ()
 outgoing n@Node{..} addr sock = void $ do
@@ -71,7 +71,7 @@ outgoing n@Node{..} addr sock = void $ do
     headerBS <- recv sock hSize
     let (Header _ nbytes) = decode headerBS
     oaddrBS <- recv sock nbytes
-    guard $ decode oaddrBS == addr
+    guard $ decode oaddrBS == Addr addr
     send sock $ encode ACK
 
     headerBS' <- recv sock hSize
@@ -104,8 +104,8 @@ instance Error (DecodingError, Producer ByteString IO ())
 handle :: Node -> Socket -> SockAddr -> IO ()
 handle n@Node{..} sock addr =
   -- TODO: Make sure no issues with async exceptions
-    flip finally (modifyMVar_ connections (pure . Map.delete addr)) $ do
-        modifyMVar_ connections $ pure . Map.insert addr sock
+    flip finally (modifyMVar_ connections (pure . Map.delete (Addr addr))) $ do
+        modifyMVar_ connections $ pure . Map.insert (Addr addr) sock
         let (outbc, inbc) = broadcaster
 
         tid <- myThreadId
@@ -124,13 +124,13 @@ handle n@Node{..} sock addr =
                 Right GETADDR -> do
                     conns <- liftIO $ readMVar connections
                     each (Map.keys conns) >-> P.map encode >-> toSocket sock
-                Right (ADDR addr') -> do
+                Right (ADDR (Addr addr')) -> do
                     conns <- liftIO $ readMVar connections
-                    if Map.member addr' conns
+                    if Map.member (Addr addr') conns
                     then return ()
                     else liftIO . void . connectFork addr' $ outgoing n addr'
                 Left (Relay tid' addr') -> if tid' == tid
                                     then return ()
-                                    else liftIO . send sock $ encode addr'
+                                    else liftIO . send sock $ encode (Addr addr')
                 _ -> return ()
          )
