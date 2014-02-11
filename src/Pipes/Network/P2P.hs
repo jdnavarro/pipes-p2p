@@ -1,21 +1,17 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NamedFieldPuns, RecordWildCards #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE LambdaCase #-}
 module Pipes.Network.P2P where
 
 import Control.Applicative ((<$>), (<*>), pure)
 import Control.Monad (void, guard, forever)
-import Data.Monoid ((<>))
-import Control.Concurrent (ThreadId, myThreadId)
+import Control.Concurrent (myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
-import GHC.Generics (Generic)
 import Control.Exception (finally)
 import Data.Foldable (for_)
 
 import Control.Concurrent.Async (concurrently)
 import Data.ByteString (ByteString)
-import qualified Data.ByteString as B
 import Data.Map (Map)
 import qualified Data.Map as Map
 
@@ -25,7 +21,7 @@ import Pipes
 import qualified Pipes.Prelude as P
 import Control.Monad.Trans.Error
 import Pipes.Lift (errorP, runErrorP)
-import Pipes.Binary (Binary, decoded, DecodingError)
+import Pipes.Binary (decoded, DecodingError)
 import qualified Pipes.Concurrent
 import Pipes.Concurrent
   ( Buffer(Unbounded)
@@ -49,43 +45,19 @@ import Network.Simple.SockAddr
   , recv
   )
 
-import Pipes.Network.Internal
+import Pipes.Network.P2P.Message
 
 type Mailbox = (Output Relay, Input Relay)
 
 data Node = Node
-    { address     :: SockAddr
+    { magic       :: Int
+    , address     :: SockAddr
     , connections :: MVar (Map SockAddr Socket)
     , broadcaster :: Mailbox
     }
 
 node :: SockAddr -> IO Node
-node addr = Node addr <$> newMVar Map.empty <*> spawn Unbounded
-
-data Header = Header Int Int deriving (Show, Generic)
-
-instance Binary Header
-
-headerSize = B.length . encode $ Header 0 0
-
-data Payload = GETADDR
-             | ADDR SockAddr
-             | ME SockAddr
-             | ACK
-               deriving (Show, Eq, Generic)
-
-instance Binary Payload
-
-data Message = Message Header Payload deriving (Show, Generic)
-
-instance Binary Message
-
-serialize :: Payload -> ByteString
-serialize payload = encode (Header magic $ B.length bs) <> bs
-  where
-    bs = encode payload
-
-data Relay = Relay ThreadId SockAddr
+node addr = Node 26513 addr <$> newMVar Map.empty <*> spawn Unbounded
 
 launch :: Node -> [SockAddr] -> IO ()
 launch n@Node{..} addrs = do
@@ -94,15 +66,15 @@ launch n@Node{..} addrs = do
 
 outgoing :: Node -> SockAddr -> Socket -> IO ()
 outgoing n@Node{..} addr sock = void $ do
-    send sock . serialize $ ME address
+    send sock . serialize magic $ ME address
 
-    headerBS <- recv sock headerSize
+    headerBS <- recv sock hSize
     let (Header _ nbytes) = decode headerBS
     oaddrBS <- recv sock nbytes
     guard $ decode oaddrBS == addr
     send sock $ encode ACK
 
-    headerBS' <- recv sock headerSize
+    headerBS' <- recv sock hSize
     let (Header _ nbytes') = decode headerBS'
     ack <- recv sock nbytes'
     guard $ decode ack == ACK
@@ -113,13 +85,13 @@ outgoing n@Node{..} addr sock = void $ do
 
 incoming :: Node -> SockAddr -> Socket -> IO ()
 incoming n@Node{..} addr sock = void $ do
-    headerBS <- recv sock headerSize
+    headerBS <- recv sock hSize
     let (Header _ nbytes) = decode headerBS
     _oaddrBS <- recv sock nbytes
-    send sock . serialize $ ME address
+    send sock . serialize magic $ ME address
     send sock $ encode ACK
 
-    headerBS' <- recv sock headerSize
+    headerBS' <- recv sock hSize
     let (Header _ nbytes') = decode headerBS'
     ack <- recv sock nbytes'
     guard $ decode ack == ACK
@@ -162,5 +134,3 @@ handle n@Node{..} sock addr =
                                     else liftIO . send sock $ encode addr'
                 _ -> return ()
          )
-
-magic = 26513
