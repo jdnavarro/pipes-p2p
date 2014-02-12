@@ -15,6 +15,7 @@ import Data.ByteString (ByteString)
 import Data.Map (Map)
 import qualified Data.Map as Map
 
+import Control.Error
 import Lens.Family2 ((^.))
 
 import Pipes
@@ -65,38 +66,41 @@ launch n@Node{..} addrs = do
     serve (getSockAddr address) $ incoming n
 
 outgoing :: Node -> SockAddr -> Socket -> IO ()
-outgoing n@Node{..} addr sock = do
-    send sock . serialize magic $ ME address
+outgoing n@Node{..} addr sock = void . runMaybeT $ do
+    liftIO . send sock . serialize magic $ ME address
 
-    headerBS <- recv sock hSize
-    let (Header _ nbytes) = decode headerBS
-    oaddrBS <- recv sock nbytes
-    guard $ decode oaddrBS == Addr addr
-    send sock $ encode ACK
+    headerBS <- liftIO $ recv sock hSize
+    (Header _ nbytes) <- hoistMaybe $ decode headerBS
+    oaddrBS <- liftIO $ recv sock nbytes
+    oaddr <- hoistMaybe $ decode oaddrBS
+    guard $ oaddr == Addr addr
+    liftIO $ send sock $ encode ACK
 
-    headerBS' <- recv sock hSize
-    let (Header _ nbytes') = decode headerBS'
-    ack <- recv sock nbytes'
-    guard $ decode ack == ACK
+    headerBS' <- liftIO $ recv sock hSize
+    (Header _ nbytes') <- hoistMaybe $ decode headerBS'
+    ackBS <- liftIO $ recv sock nbytes'
+    ack <- hoistMaybe $ decode ackBS
+    guard $ ack == ACK
 
-    send sock $ encode GETADDR
+    liftIO $ send sock $ encode GETADDR
 
-    handle n sock addr
+    liftIO $ handle n sock addr
 
 incoming :: Node -> SockAddr -> Socket -> IO ()
-incoming n@Node{..} addr sock = do
-    headerBS <- recv sock hSize
-    let (Header _ nbytes) = decode headerBS
-    _oaddrBS <- recv sock nbytes
-    send sock . serialize magic $ ME address
-    send sock $ encode ACK
+incoming n@Node{..} addr sock = void . runMaybeT $ do
+    headerBS <- liftIO $ recv sock hSize
+    (Header _ nbytes) <- hoistMaybe $ decode headerBS
+    _oaddrBS <- liftIO $ recv sock nbytes
+    liftIO $ send sock . serialize magic $ ME address
+    liftIO $ send sock $ encode ACK
 
-    headerBS' <- recv sock hSize
-    let (Header _ nbytes') = decode headerBS'
-    ack <- recv sock nbytes'
-    guard $ decode ack == ACK
+    headerBS' <- liftIO $ recv sock hSize
+    (Header _ nbytes') <- hoistMaybe $ decode headerBS'
+    ackBS <- liftIO $ recv sock nbytes'
+    ack <- hoistMaybe $ decode ackBS
+    guard $ ack == ACK
 
-    handle n sock addr
+    liftIO $ handle n sock addr
 
 -- TODO: How to get rid of this?
 instance Error (DecodingError, Producer ByteString IO ())

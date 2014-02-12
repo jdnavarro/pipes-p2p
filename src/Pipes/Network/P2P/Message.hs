@@ -8,13 +8,14 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import Data.ByteString.Lazy (toStrict, fromStrict)
 import Data.Binary (Binary(put,get), putWord8, getWord8)
-import qualified Data.Binary as Binary(encode,decode)
+import qualified Data.Binary as Binary(encode,decodeOrFail)
 import Control.Concurrent (ThreadId)
 import GHC.Generics (Generic)
 import Network.Socket
   ( SockAddr(SockAddrInet, SockAddrInet6, SockAddrUnix)
   , PortNumber(PortNum)
   )
+import Control.Error (hush)
 
 data Header = Header Int Int deriving (Show, Generic)
 
@@ -62,5 +63,7 @@ instance Binary Address where
 encode :: Binary a => a -> ByteString
 encode = toStrict . Binary.encode
 
-decode :: Binary a => ByteString -> a
-decode = Binary.decode . fromStrict
+decode :: Binary a => ByteString -> Maybe a
+decode = fmap third . hush . Binary.decodeOrFail . fromStrict
+  where
+    third (_,_,x) = x
