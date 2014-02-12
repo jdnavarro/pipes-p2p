@@ -60,8 +60,8 @@ data Node = Node
     , broadcaster :: Mailbox
     }
 
-node :: SockAddr -> IO Node
-node addr = Node 26513 (Addr addr) <$> newMVar Map.empty <*> spawn Unbounded
+node :: Int -> SockAddr -> IO Node
+node magic addr = Node magic (Addr addr) <$> newMVar Map.empty <*> spawn Unbounded
 
 launch :: Node -> [SockAddr] -> IO ()
 launch n@Node{..} addrs = do
@@ -79,25 +79,26 @@ outgoing n@Node{..} addr sock = void . runMaybeT $ do
 
 incoming :: Node -> SockAddr -> Socket -> IO ()
 incoming n@Node{..} addr sock = void . runMaybeT $ do
-    fetch sock >>= \case
-        ME (Addr oaddr) -> do deliver sock magic $ ME address
-                              deliver sock magic $ ACK
-                              expect sock ACK
+    fetch magic sock >>= \case
+        ME (Addr oaddr) -> do deliver magic sock $ ME address
+                              deliver magic sock $ ACK
+                              expect magic sock ACK
                               liftIO $ handle n sock oaddr
         _ -> return ()
 
-deliver :: MonadIO m => Socket -> Int -> Payload -> m ()
-deliver sock magic = liftIO . send sock . serialize magic
+deliver :: MonadIO m => Int -> Socket -> Payload -> m ()
+deliver magic sock = liftIO . send sock . serialize magic
 
-expect :: MonadIO m => Socket -> Payload -> MaybeT m ()
-expect sock payload = do
-    payload' <- fetch sock
+expect :: MonadIO m => Int -> Socket -> Payload -> MaybeT m ()
+expect magic sock payload = do
+    payload' <- fetch magic sock
     guard $ payload == payload'
 
-fetch :: MonadIO m => Socket -> MaybeT m Payload
-fetch sock = do
+fetch :: MonadIO m => Int -> Socket -> MaybeT m Payload
+fetch magic sock = do
     headerBS <- liftIO $ recv sock hSize
-    (Header _ nbytes) <- hoistMaybe $ decode headerBS
+    (Header magic' nbytes) <- hoistMaybe $ decode headerBS
+    guard $ magic == magic'
     bs <- liftIO $ recv sock nbytes
     hoistMaybe $ decode bs
 
