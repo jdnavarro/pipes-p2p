@@ -1,7 +1,10 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NamedFieldPuns, RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
-module Pipes.Network.P2P where
+module Pipes.Network.P2P
+  ( node
+  , launch
+  ) where
 
 import Control.Applicative ((<$>), (<*>), pure)
 import Control.Monad (void, guard, forever, when, unless)
@@ -15,12 +18,12 @@ import Data.ByteString (ByteString)
 import Data.Map (Map)
 import qualified Data.Map as Map
 
-import Control.Error
+import Control.Error (MaybeT, runMaybeT, hoistMaybe)
 import Lens.Family2 ((^.))
 
 import Pipes
 import qualified Pipes.Prelude as P
-import Control.Monad.Trans.Error
+import Control.Monad.Trans.Error (Error)
 import Pipes.Lift (errorP, runErrorP)
 import Pipes.Binary (decoded, DecodingError)
 import qualified Pipes.Concurrent
@@ -67,40 +70,36 @@ launch n@Node{..} addrs = do
 
 outgoing :: Node -> SockAddr -> Socket -> IO ()
 outgoing n@Node{..} addr sock = void . runMaybeT $ do
-    liftIO . send sock . serialize magic $ ME address
-
-    headerBS <- liftIO $ recv sock hSize
-    (Header _ nbytes) <- hoistMaybe $ decode headerBS
-    oaddrBS <- liftIO $ recv sock nbytes
-    oaddr <- hoistMaybe $ decode oaddrBS
-    guard $ oaddr == Addr addr
-    liftIO $ send sock $ encode ACK
-
-    headerBS' <- liftIO $ recv sock hSize
-    (Header _ nbytes') <- hoistMaybe $ decode headerBS'
-    ackBS <- liftIO $ recv sock nbytes'
-    ack <- hoistMaybe $ decode ackBS
-    guard $ ack == ACK
-
-    liftIO $ send sock $ encode GETADDR
-
+    deliver magic sock $ ME address
+    expect magic sock (ME $ Addr addr)
+    deliver magic sock $ ACK
+    expect magic sock ACK
+    deliver magic sock GETADDR
     liftIO $ handle n sock addr
 
 incoming :: Node -> SockAddr -> Socket -> IO ()
 incoming n@Node{..} addr sock = void . runMaybeT $ do
+    fetch sock >>= \case
+        ME (Addr oaddr) -> do deliver sock magic $ ME address
+                              deliver sock magic $ ACK
+                              expect sock ACK
+                              liftIO $ handle n sock oaddr
+        _ -> return ()
+
+deliver :: MonadIO m => Socket -> Int -> Payload -> m ()
+deliver sock magic = liftIO . send sock . serialize magic
+
+expect :: MonadIO m => Socket -> Payload -> MaybeT m ()
+expect sock payload = do
+    payload' <- fetch sock
+    guard $ payload == payload'
+
+fetch :: MonadIO m => Socket -> MaybeT m Payload
+fetch sock = do
     headerBS <- liftIO $ recv sock hSize
     (Header _ nbytes) <- hoistMaybe $ decode headerBS
-    _oaddrBS <- liftIO $ recv sock nbytes
-    liftIO $ send sock . serialize magic $ ME address
-    liftIO $ send sock $ encode ACK
-
-    headerBS' <- liftIO $ recv sock hSize
-    (Header _ nbytes') <- hoistMaybe $ decode headerBS'
-    ackBS <- liftIO $ recv sock nbytes'
-    ack <- hoistMaybe $ decode ackBS
-    guard $ ack == ACK
-
-    liftIO $ handle n sock addr
+    bs <- liftIO $ recv sock nbytes
+    hoistMaybe $ decode bs
 
 -- TODO: How to get rid of this?
 instance Error (DecodingError, Producer ByteString IO ())
