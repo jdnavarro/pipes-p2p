@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NamedFieldPuns, RecordWildCards #-}
 {-# LANGUAGE LambdaCase #-}
@@ -6,8 +7,10 @@ module Pipes.Network.P2P
   , launch
   ) where
 
+import Prelude hiding (log)
 import Control.Applicative ((<$>), (<*>), pure)
 import Control.Monad (void, guard, forever, when, unless)
+import Data.Monoid ((<>))
 import Control.Concurrent (myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
 import Control.Exception (finally)
@@ -15,10 +18,11 @@ import Data.Foldable (for_)
 
 import Control.Concurrent.Async (concurrently)
 import Data.ByteString (ByteString)
+import qualified Data.ByteString.Char8 as B8
 import Data.Map (Map)
 import qualified Data.Map as Map
 
-import Control.Error (MaybeT, runMaybeT, hoistMaybe)
+import Control.Error (MaybeT, fromMaybe, runMaybeT, hoistMaybe)
 import Lens.Family2 ((^.))
 
 import Pipes
@@ -53,15 +57,31 @@ import Pipes.Network.P2P.Message
 
 type Mailbox = (Output Relay, Input Relay)
 
+type Logger = Bool -> Address -> IO ()
+
 data Node = Node
     { magic       :: Int
     , address     :: Address
+    , logger      :: Logger
     , connections :: MVar (Map Address Socket)
     , broadcaster :: Mailbox
     }
 
-node :: Int -> SockAddr -> IO Node
-node magic addr = Node magic (Addr addr) <$> newMVar Map.empty <*> spawn Unbounded
+node :: Maybe Logger -> Int -> SockAddr -> IO Node
+node mlog magic addr = Node magic (Addr addr) log
+                   <$> newMVar Map.empty
+                   <*> spawn Unbounded
+  where
+    log = fromMaybe defaultLogger mlog
+    defaultLogger flag (Addr addr') =
+        B8.putStrLn $ "Node "
+                   <> B8.pack (show addr)
+                   <> ": "
+                   <> "Address "
+                   <> (if flag
+                       then "added: "
+                       else "deleted: ")
+                   <> B8.pack (show addr')
 
 launch :: Node -> [SockAddr] -> IO ()
 launch n@Node{..} addrs = do
@@ -78,7 +98,7 @@ outgoing n@Node{..} addr sock = void . runMaybeT $ do
     liftIO $ handle n sock addr
 
 incoming :: Node -> SockAddr -> Socket -> IO ()
-incoming n@Node{..} addr sock = void . runMaybeT $ do
+incoming n@Node{..} _ sock = void . runMaybeT $ do
     fetch magic sock >>= \case
         ME (Addr oaddr) -> do deliver magic sock $ ME address
                               deliver magic sock $ ACK
@@ -108,8 +128,10 @@ instance Error (DecodingError, Producer ByteString IO ())
 handle :: Node -> Socket -> SockAddr -> IO ()
 handle n@Node{..} sock addr =
   -- TODO: Make sure no issues with async exceptions
-    flip finally (modifyMVar_ connections (pure . Map.delete (Addr addr))) $ do
+    flip finally (modifyMVar_ connections (pure . Map.delete (Addr addr)) >>
+                  logger False (Addr addr)) $ do
         modifyMVar_ connections $ pure . Map.insert (Addr addr) sock
+        logger True (Addr addr)
         let (outbc, inbc) = broadcaster
 
         tid <- myThreadId

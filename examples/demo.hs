@@ -17,13 +17,13 @@ main = do
         addr3 = SockAddrInet 1234 iNADDR_ANY
         addr4 = SockAddrInet 1235 iNADDR_ANY
         magic = 2741
-    n1 <- node magic addr1
-    n2 <- node magic addr2
-    n3 <- node magic addr3
-    n4 <- node magic addr4
+    n1 <- node Nothing magic addr1
+    n2 <- node Nothing magic addr2
+    n3 <- node Nothing magic addr3
+    n4 <- node Nothing magic addr4
     _ <- forkIO $ launch n1 []
     _ <- forkIO $ launch n2 [addr1]
-    _ <- forkIO $ launch n3 [addr2,addr3]
+    _ <- forkIO $ launch n3 [addr1,addr2]
     _ <- forkIO $ launch n4 [addr3]
     threadDelay $ 10 ^ (6::Int)
     traverse_ removeFile [path1,path2]
