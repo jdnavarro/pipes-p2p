@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE NamedFieldPuns, RecordWildCards #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 module Pipes.Network.P2P
   ( node
@@ -8,7 +9,7 @@ module Pipes.Network.P2P
   ) where
 
 import Prelude hiding (log)
-import Control.Applicative ((<$>), (<*>), pure)
+import Control.Applicative (Applicative, (<$>), (<*>), pure)
 import Control.Monad (void, guard, forever, when, unless)
 import Data.Monoid ((<>))
 import Control.Concurrent (myThreadId)
@@ -21,13 +22,15 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Control.Monad.Error (Error)
+import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, ask)
 
 import Control.Error (MaybeT, fromMaybe, runMaybeT, hoistMaybe)
+import Control.Monad.Catch (MonadCatch)
 import Lens.Family2 ((^.))
 
 import Pipes
 import qualified Pipes.Prelude as P
-import Control.Monad.Trans.Error (Error)
 import Pipes.Lift (errorP, runErrorP)
 import Pipes.Binary (decoded, DecodingError)
 import qualified Pipes.Concurrent
@@ -67,10 +70,24 @@ data Node = Node
     , broadcaster :: Mailbox
     }
 
-node :: Maybe Logger -> Int -> SockAddr -> IO Node
+data NodeConn = NodeConn Node SockAddr Socket
+
+newtype NodeConnT m r = NodeConnT
+    { unNodeConnT :: ReaderT NodeConn m r
+    } deriving (Functor, Applicative, Monad, MonadIO, MonadReader NodeConn)
+
+runNodeConnT :: MonadIO m => Node -> NodeConnT m a -> SockAddr -> Socket -> m a
+runNodeConnT n nt addr sock =
+    runReaderT (unNodeConnT nt) (NodeConn n addr sock)
+
+node :: (Functor m, Applicative m, MonadIO m)
+     => Maybe Logger
+     -> Int
+     -> SockAddr
+     -> m Node
 node mlog magic addr = Node magic (Addr addr) log
-                   <$> newMVar Map.empty
-                   <*> spawn Unbounded
+                   <$> liftIO (newMVar Map.empty)
+                   <*> liftIO (spawn Unbounded)
   where
     log = fromMaybe defaultLogger mlog
     defaultLogger flag (Addr addr') =
@@ -83,39 +100,46 @@ node mlog magic addr = Node magic (Addr addr) log
                        else "deleted: ")
                    <> B8.pack (show addr')
 
-launch :: Node -> [SockAddr] -> IO ()
+launch :: (Functor m, Applicative m, MonadIO m, MonadCatch m)
+       => Node
+       -> [SockAddr]
+       -> m ()
 launch n@Node{..} addrs = do
-    for_ addrs $ \a -> connectFork a $ outgoing n a
-    serve (getSockAddr address) $ incoming n
+    for_ addrs $ \addr -> connectFork addr $ runNodeConnT n outgoing addr
+    serve (getSockAddr address) $ runNodeConnT n incoming
 
-outgoing :: Node -> SockAddr -> Socket -> IO ()
-outgoing n@Node{..} addr sock = void . runMaybeT $ do
-    deliver magic sock $ ME address
-    expect magic sock (ME $ Addr addr)
-    deliver magic sock $ ACK
-    expect magic sock ACK
-    deliver magic sock GETADDR
+outgoing :: (Functor m, MonadIO m) => NodeConnT m ()
+outgoing = void . runMaybeT $ do
+    NodeConn n@Node{address} addr sock <- ask
+    deliver $ ME address
+    expect (ME $ Addr addr)
+    deliver ACK
+    expect ACK
+    deliver GETADDR
     liftIO $ handle n sock addr
 
-incoming :: Node -> SockAddr -> Socket -> IO ()
-incoming n@Node{..} _ sock = void . runMaybeT $ do
-    fetch magic sock >>= \case
-        ME (Addr oaddr) -> do deliver magic sock $ ME address
-                              deliver magic sock $ ACK
-                              expect magic sock ACK
+incoming :: (Functor m, MonadIO m) => NodeConnT m ()
+incoming = void . runMaybeT $ do
+    NodeConn n@Node{address} _ sock <- ask
+    fetch >>= \case
+        ME (Addr oaddr) -> do deliver $ ME address
+                              deliver ACK
+                              expect ACK
                               liftIO $ handle n sock oaddr
         _ -> return ()
 
-deliver :: MonadIO m => Int -> Socket -> Payload -> m ()
-deliver magic sock = liftIO . send sock . serialize magic
+deliver :: MonadIO m => Payload -> MaybeT (NodeConnT m) ()
+deliver payload = do NodeConn Node{magic} _ sock <- ask
+                     liftIO . send sock $ serialize magic payload
 
-expect :: MonadIO m => Int -> Socket -> Payload -> MaybeT m ()
-expect magic sock payload = do
-    payload' <- fetch magic sock
+expect :: MonadIO m => Payload -> MaybeT (NodeConnT m) ()
+expect payload = do
+    payload' <- fetch
     guard $ payload == payload'
 
-fetch :: MonadIO m => Int -> Socket -> MaybeT m Payload
-fetch magic sock = do
+fetch :: MonadIO m => MaybeT (NodeConnT m) Payload
+fetch = do
+    NodeConn Node{magic} _ sock <- ask
     headerBS <- liftIO $ recv sock hSize
     (Header magic' nbytes) <- hoistMaybe $ decode headerBS
     guard $ magic == magic'
@@ -126,7 +150,7 @@ fetch magic sock = do
 instance Error (DecodingError, Producer ByteString IO ())
 
 handle :: Node -> Socket -> SockAddr -> IO ()
-handle n@Node{..} sock addr =
+handle Node{..} sock addr =
   -- TODO: Make sure no issues with async exceptions
     flip finally (modifyMVar_ connections (pure . Map.delete (Addr addr)) >>
                   logger False (Addr addr)) $ do
@@ -153,7 +177,7 @@ handle n@Node{..} sock addr =
                 Right (ADDR (Addr addr')) -> do
                     conns <- liftIO $ readMVar connections
                     when (Map.member (Addr addr') conns)
-                         (liftIO . void . connectFork addr' $ outgoing n addr')
+                         (liftIO . void . connectFork addr' $ undefined) --outgoing n addr')
                 Left (Relay tid' addr') -> unless
                     (tid' == tid) (liftIO . send sock $ encode (Addr addr'))
                 _ -> return ())
