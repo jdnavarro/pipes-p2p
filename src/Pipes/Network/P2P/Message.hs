@@ -41,7 +41,7 @@ serialize magic payload = encode (Header magic $ B.length bs) <> bs
   where
     bs = encode payload
 
-data Relay = Relay ThreadId SockAddr
+data Relay = Relay ThreadId Address
 
 newtype Address = Addr SockAddr deriving (Show, Eq, Ord)
 

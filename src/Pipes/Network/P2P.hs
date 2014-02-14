@@ -4,6 +4,7 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE ImpredicativeTypes #-}
 module Pipes.Network.P2P
   ( node
   , launch
@@ -15,20 +16,19 @@ import Control.Monad (void, guard, forever, when, unless)
 import Data.Monoid ((<>))
 import Control.Concurrent (myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
-import Control.Exception (finally)
 import Data.Foldable (for_)
 
 import Control.Concurrent.Async (concurrently)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
-import Data.Map (Map)
-import qualified Data.Map as Map
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Control.Monad.Trans (MonadIO, liftIO, lift)
 import Control.Monad.Error (Error)
 import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, ask)
 
 import Control.Error (MaybeT, fromMaybe, runMaybeT, hoistMaybe)
-import Control.Monad.Catch (MonadCatch)
+import Control.Monad.Catch (MonadCatch, bracket_)
 import Lens.Family2 ((^.))
 
 import Pipes (Producer, Consumer, (>->), runEffect, await, each)
@@ -68,7 +68,7 @@ data Node = Node
     { magic       :: Int
     , address     :: Address
     , logger      :: Logger
-    , connections :: MVar (Map Address Socket)
+    , peers       :: MVar (Set Address)
     , broadcaster :: Mailbox
     }
 
@@ -76,7 +76,13 @@ data NodeConn = NodeConn Node SockAddr Socket
 
 newtype NodeConnT m r = NodeConnT
     { unNodeConnT :: ReaderT NodeConn m r
-    } deriving (Functor, Applicative, Monad, MonadIO, MonadReader NodeConn)
+    } deriving ( Functor
+               , Applicative
+               , Monad
+               , MonadIO
+               , MonadCatch
+               , MonadReader NodeConn
+               )
 
 runNodeConnT :: MonadIO m => Node -> NodeConnT m a -> SockAddr -> Socket -> m a
 runNodeConnT n nt addr sock =
@@ -88,7 +94,7 @@ node :: (Functor m, Applicative m, MonadIO m)
      -> SockAddr
      -> m Node
 node mlog magic addr = Node magic (Addr addr) log
-                   <$> liftIO (newMVar Map.empty)
+                   <$> liftIO (newMVar Set.empty)
                    <*> liftIO (spawn Unbounded)
   where
     log = fromMaybe defaultLogger mlog
@@ -110,23 +116,24 @@ launch n@Node{address} addrs = do
     for_ addrs $ \addr -> connectFork addr $ runNodeConnT n outgoing addr
     serve (getSockAddr address) $ runNodeConnT n incoming
 
-outgoing :: (Functor m, MonadIO m) => NodeConnT m ()
-outgoing = void $ runMaybeT (do
+outgoing :: (Functor m, MonadIO m, MonadCatch m) => NodeConnT m ()
+outgoing = void . runMaybeT $ do
     NodeConn Node{address} addr _ <- ask
     deliver $ ME address
     expect . ME $ Addr addr
     deliver ACK
     expect ACK
-    deliver GETADDR) >> handle
+    deliver GETADDR
+    lift $ handle (Addr addr)
 
-incoming :: (Functor m, MonadIO m) => NodeConnT m ()
+incoming :: (Functor m, MonadIO m, MonadCatch m) => NodeConnT m ()
 incoming = void . runMaybeT $ do
     NodeConn Node{address} _ _ <- ask
     fetch >>= \case
-        ME (Addr _) -> deliver (ME address)
-                    >> deliver ACK
-                    >> expect ACK
-                    >> lift handle
+        ME addr@(Addr _) -> deliver (ME address)
+                         >> deliver ACK
+                         >> expect ACK
+                         >> lift (handle addr)
         _ -> return ()
 
 deliver :: MonadIO m => Payload -> MaybeT (NodeConnT m) ()
@@ -147,21 +154,28 @@ fetch = do
     bs <- liftIO $ recv sock nbytes
     hoistMaybe $ decode bs
 
+register :: MonadIO m => Address -> NodeConnT m ()
+register addr = do
+    NodeConn Node{peers, logger} _ _ <- ask
+    liftIO $ modifyMVar_ peers $ pure . Set.insert addr
+    liftIO $ logger True addr
+
+unregister :: MonadIO m => Address -> NodeConnT m ()
+unregister addr = do
+    NodeConn Node{peers, logger} _ _ <- ask
+    liftIO $ modifyMVar_ peers $ pure . Set.delete addr
+    liftIO $ logger False addr
+
 -- TODO: How to get rid of this?
 instance Error (DecodingError, Producer ByteString IO ())
 
-handle :: MonadIO m => NodeConnT m ()
-handle = do
-    NodeConn Node{connections, logger, broadcaster} addr sock <- ask
+handle :: (MonadIO m, MonadCatch m) => Address -> NodeConnT m ()
+handle addr = bracket_ (register addr) (unregister addr) $ do
+    NodeConn Node{broadcaster} _ sock <- ask
     (ol, il) <- liftIO $ spawn Unbounded
-    liftIO $ flip finally (modifyMVar_ connections (pure . Map.delete (Addr addr))
-          >> logger False (Addr addr)) $ do
+    liftIO $ do
         let (obc, ibc) = broadcaster
         tid <- myThreadId
-
-        -- Insert address
-        modifyMVar_ connections $ pure . Map.insert (Addr addr) sock
-        logger True (Addr addr)
 
         -- Broadcast new connected address
         void . atomically . Pipes.Concurrent.send obc $ Relay tid addr
@@ -177,16 +191,16 @@ handle = do
 handler :: (MonadIO m, MonadReader NodeConn m)
         => Consumer (Either Relay Payload) m r
 handler = do
-    NodeConn n@Node{connections} _ sock <- ask
+    NodeConn n@Node{peers} _ sock <- ask
     tid <- liftIO myThreadId
     forever $ await >>= \case
         Right GETADDR -> do
-            conns <- liftIO $ readMVar connections
-            each (Map.keys conns) >-> P.map encode >-> toSocket sock
+            conns <- liftIO $ readMVar peers
+            each (Set.toList conns) >-> P.map encode >-> toSocket sock
         Right (ADDR (Addr addr')) -> do
-            conns <- liftIO $ readMVar connections
-            when (Map.member (Addr addr') conns)
+            conns <- liftIO $ readMVar peers
+            when (Set.member (Addr addr') conns)
                  (liftIO . void $ connectFork addr' (runNodeConnT n outgoing addr'))
         Left (Relay tid' addr') -> unless
-            (tid' == tid) (liftIO . send sock $ encode (Addr addr'))
+            (tid' == tid) (liftIO . send sock $ encode addr')
         _ -> return ()
