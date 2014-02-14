@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns, RecordWildCards #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
@@ -22,6 +23,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
 import Data.Map (Map)
 import qualified Data.Map as Map
+import Control.Monad.Trans (MonadIO, liftIO, lift)
 import Control.Monad.Error (Error)
 import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, ask)
 
@@ -29,7 +31,7 @@ import Control.Error (MaybeT, fromMaybe, runMaybeT, hoistMaybe)
 import Control.Monad.Catch (MonadCatch)
 import Lens.Family2 ((^.))
 
-import Pipes
+import Pipes (Producer, Consumer, (>->), runEffect, await, each)
 import qualified Pipes.Prelude as P
 import Pipes.Lift (errorP, runErrorP)
 import Pipes.Binary (decoded, DecodingError)
@@ -109,23 +111,22 @@ launch n@Node{..} addrs = do
     serve (getSockAddr address) $ runNodeConnT n incoming
 
 outgoing :: (Functor m, MonadIO m) => NodeConnT m ()
-outgoing = void . runMaybeT $ do
-    NodeConn n@Node{address} addr sock <- ask
+outgoing = void $ runMaybeT (do
+    NodeConn Node{address} addr _ <- ask
     deliver $ ME address
-    expect (ME $ Addr addr)
+    expect . ME $ Addr addr
     deliver ACK
     expect ACK
-    deliver GETADDR
-    liftIO $ handle n sock addr
+    deliver GETADDR) >> handle
 
 incoming :: (Functor m, MonadIO m) => NodeConnT m ()
 incoming = void . runMaybeT $ do
-    NodeConn n@Node{address} _ sock <- ask
+    NodeConn Node{address} _ _ <- ask
     fetch >>= \case
-        ME (Addr oaddr) -> do deliver $ ME address
-                              deliver ACK
-                              expect ACK
-                              liftIO $ handle n sock oaddr
+        ME (Addr _) -> deliver (ME address)
+                    >> deliver ACK
+                    >> expect ACK
+                    >> lift handle
         _ -> return ()
 
 deliver :: MonadIO m => Payload -> MaybeT (NodeConnT m) ()
@@ -149,35 +150,43 @@ fetch = do
 -- TODO: How to get rid of this?
 instance Error (DecodingError, Producer ByteString IO ())
 
-handle :: Node -> Socket -> SockAddr -> IO ()
-handle Node{..} sock addr =
-  -- TODO: Make sure no issues with async exceptions
-    flip finally (modifyMVar_ connections (pure . Map.delete (Addr addr)) >>
-                  logger False (Addr addr)) $ do
+handle :: MonadIO m => NodeConnT m ()
+handle = do
+    NodeConn Node{connections, logger, broadcaster} addr sock <- ask
+    (ol, il) <- liftIO $ spawn Unbounded
+    liftIO $ flip finally (modifyMVar_ connections (pure . Map.delete (Addr addr))
+          >> logger False (Addr addr)) $ do
+        let (obc, ibc) = broadcaster
+        tid <- myThreadId
+
+        -- Insert address
         modifyMVar_ connections $ pure . Map.insert (Addr addr) sock
         logger True (Addr addr)
-        let (outbc, inbc) = broadcaster
 
-        tid <- myThreadId
-        void . atomically . Pipes.Concurrent.send outbc $ Relay tid addr
+        -- Broadcast new connected address
+        void . atomically . Pipes.Concurrent.send obc $ Relay tid addr
 
-        (outr, inr) <- spawn Unbounded
-        let socketReader = runEffect . void . runErrorP
-                         $ errorP (fromSocket sock 4096 ^. decoded)
-                       >-> P.map Right >-> toOutput outr
-            broadcastReader = runEffect $ fromInput inbc
-                          >-> P.map Left >-> toOutput outr
-        void $ concurrently socketReader broadcastReader
+        void $ concurrently
+               (runEffect . void . runErrorP
+                          $ errorP (fromSocket sock 4096 ^. decoded)
+                        >-> P.map Right
+                        >-> toOutput ol)
+               (runEffect $ fromInput ibc >-> P.map Left >-> toOutput ol)
+    runEffect $ fromInput il >-> handler
 
-        runEffect $ fromInput inr >-> forever (
-            await >>= \case
-                Right GETADDR -> do
-                    conns <- liftIO $ readMVar connections
-                    each (Map.keys conns) >-> P.map encode >-> toSocket sock
-                Right (ADDR (Addr addr')) -> do
-                    conns <- liftIO $ readMVar connections
-                    when (Map.member (Addr addr') conns)
-                         (liftIO . void . connectFork addr' $ undefined) --outgoing n addr')
-                Left (Relay tid' addr') -> unless
-                    (tid' == tid) (liftIO . send sock $ encode (Addr addr'))
-                _ -> return ())
+handler :: (MonadIO m, MonadReader NodeConn m)
+        => Consumer (Either Relay Payload) m r
+handler = do
+    NodeConn n@Node{connections} _ sock <- ask
+    tid <- liftIO myThreadId
+    forever $ await >>= \case
+        Right GETADDR -> do
+            conns <- liftIO $ readMVar connections
+            each (Map.keys conns) >-> P.map encode >-> toSocket sock
+        Right (ADDR (Addr addr')) -> do
+            conns <- liftIO $ readMVar connections
+            when (Map.member (Addr addr') conns)
+                 (liftIO . void $ connectFork addr' (runNodeConnT n outgoing addr'))
+        Left (Relay tid' addr') -> unless
+            (tid' == tid) (liftIO . send sock $ encode (Addr addr'))
+        _ -> return ()
