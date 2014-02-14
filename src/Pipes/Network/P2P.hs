@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE NamedFieldPuns, RecordWildCards #-}
+{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 module Pipes.Network.P2P
@@ -106,7 +106,7 @@ launch :: (Functor m, Applicative m, MonadIO m, MonadCatch m)
        => Node
        -> [SockAddr]
        -> m ()
-launch n@Node{..} addrs = do
+launch n@Node{address} addrs = do
     for_ addrs $ \addr -> connectFork addr $ runNodeConnT n outgoing addr
     serve (getSockAddr address) $ runNodeConnT n incoming
 
