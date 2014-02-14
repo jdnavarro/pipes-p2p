@@ -1,18 +1,19 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main (main) where
 
-import Control.Concurrent
+import Control.Concurrent (forkIO, threadDelay)
+import Control.Exception (finally)
 import Data.Foldable (traverse_)
 import System.Directory (removeFile)
-import Pipes.Network.P2P
 import Network.Socket (SockAddr(..), iNADDR_ANY)
+import Pipes.Network.P2P
 
+path1 = "/tmp/n1.socket"
+path2 = "/tmp/n2.socket"
 
 main :: IO ()
-main = do
-    let path1 = "/tmp/n1.socket"
-        path2 = "/tmp/n2.socket"
-        addr1 = SockAddrUnix path1
+main = flip finally (traverse_ removeFile [path1,path2]) $ do
+    let addr1 = SockAddrUnix path1
         addr2 = SockAddrUnix path2
         addr3 = SockAddrInet 1234 iNADDR_ANY
         addr4 = SockAddrInet 1235 iNADDR_ANY
@@ -25,5 +26,4 @@ main = do
     _ <- forkIO $ launch n2 [addr1]
     _ <- forkIO $ launch n3 [addr1,addr2]
     _ <- forkIO $ launch n4 [addr3]
-    threadDelay $ 10 ^ (6::Int)
-    traverse_ removeFile [path1,path2]
+    threadDelay $ 100 ^ (6::Int)
