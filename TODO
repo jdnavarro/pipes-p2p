@@ -1,2 +1,4 @@
+- Fix ADDR/GETADDR.
 - Handle `Decoding` errors: it should ignore input and resume listening.
-- In incoming connection check advertised address replies to ping.
+- Extract `Message` implementation in different package.
+- Command line interface and configurator (different package?).
