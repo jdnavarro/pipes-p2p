@@ -13,14 +13,13 @@ import Prelude hiding (log)
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
 import Control.Monad (void, guard, forever, when, unless)
 import Data.Monoid ((<>))
-import Control.Concurrent (myThreadId)
+import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
 import Data.Foldable (for_)
 
-import Control.Concurrent.Async (concurrently)
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
-import Data.Set (Set)
+import Data.Set (Set, union)
 import qualified Data.Set as Set
 import Control.Monad.Trans (MonadIO, liftIO, lift)
 import Control.Monad.Error (Error)
@@ -43,6 +42,7 @@ import Pipes.Concurrent
   , toOutput
   , fromInput
   , atomically
+  , performGC
   )
 import Pipes.Network.TCP
   ( fromSocket
@@ -127,12 +127,15 @@ outgoing = void . runMaybeT $ do
 
 incoming :: (Functor m, MonadIO m, MonadCatch m) => NodeConnT m ()
 incoming = void . runMaybeT $ do
-    NodeConn Node{address} _ _ <- ask
+    NodeConn Node{address, peers} _ _ <- ask
     fetch >>= \case
-        ME addr@(Addr _) -> deliver (ME address)
-                         >> deliver ACK
-                         >> expect ACK
-                         >> lift (handle addr)
+        ME addr@(Addr _) -> do
+           ps <- liftIO $ readMVar peers
+           when (Set.notMember addr ps)
+                (do deliver $ ME address
+                    deliver ACK
+                    expect ACK
+                    lift $ handle addr)
         _ -> return ()
 
 deliver :: MonadIO m => Payload -> MaybeT (NodeConnT m) ()
@@ -156,13 +159,13 @@ fetch = do
 register :: MonadIO m => Address -> NodeConnT m ()
 register addr = do
     NodeConn Node{peers, logger} _ _ <- ask
-    liftIO $ modifyMVar_ peers $ pure . Set.insert addr
+    liftIO . modifyMVar_ peers $ pure . Set.insert addr
     liftIO $ logger True addr
 
 unregister :: MonadIO m => Address -> NodeConnT m ()
 unregister addr = do
     NodeConn Node{peers, logger} _ _ <- ask
-    liftIO $ modifyMVar_ peers $ pure . Set.delete addr
+    liftIO . modifyMVar_ peers $ pure . Set.delete addr
     liftIO $ logger False addr
 
 -- TODO: How to get rid of this?
@@ -179,27 +182,34 @@ handle addr = bracket_ (register addr) (unregister addr) $ do
         -- Broadcast new connected address
         void . atomically . Pipes.Concurrent.send obc $ Relay tid addr
 
-        void $ concurrently
-               (runEffect . void . runErrorP
-                          $ errorP (fromSocket sock 4096 ^. decoded)
-                        >-> P.map Right
-                        >-> toOutput ol)
-               (runEffect $ fromInput ibc >-> P.map Left >-> toOutput ol)
-    runEffect $ fromInput il >-> handler
+        void . forkIO $ do
+            runEffect . void . runErrorP
+                      $ errorP (fromSocket sock 4096 ^. decoded)
+                    >-> P.map (Right . getPayload)
+                    >-> toOutput ol
+            performGC
+        void . forkIO $ do
+            runEffect $ fromInput ibc >-> P.map Left >-> toOutput ol
+            performGC
+    runEffect $ fromInput il >-> handler addr
 
 handler :: (MonadIO m, MonadReader NodeConn m)
-        => Consumer (Either Relay Payload) m r
-handler = do
-    NodeConn n@Node{peers} _ sock <- ask
+        => Address -> Consumer (Either Relay Payload) m r
+handler addr = do
+    NodeConn n@Node{magic, peers} _ sock <- ask
     tid <- liftIO myThreadId
     forever $ await >>= \case
         Right GETADDR -> do
-            conns <- liftIO $ readMVar peers
-            each (Set.toList conns) >-> P.map encode >-> toSocket sock
-        Right (ADDR (Addr addr')) -> do
-            conns <- liftIO $ readMVar peers
-            when (Set.member (Addr addr') conns)
-                 (liftIO . void $ connectFork addr' (runNodeConnT n outgoing addr'))
-        Left (Relay tid' addr') -> unless
-            (tid' == tid) (liftIO . send sock $ encode addr')
+            ps <- liftIO $ Set.delete addr <$> readMVar peers
+            runEffect $ each (Set.toList ps)
+                    >-> P.map (serialize magic . ADDR)
+                    >-> toSocket sock
+        Right (ADDR a@(Addr a')) -> do
+            ps <- liftIO $ readMVar peers
+            unless (Set.null $ Set.fromList [a, addr] `union` ps)
+                   (liftIO . void $ connectFork a'
+                                  $ runNodeConnT n outgoing a')
+        Left (Relay tid' a) ->
+            unless (tid' == tid)
+                   (liftIO . send sock . serialize magic $ ADDR a)
         _ -> return ()

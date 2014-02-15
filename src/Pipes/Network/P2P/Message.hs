@@ -34,6 +34,9 @@ instance Binary Payload
 
 data Message = Message Header Payload deriving (Show, Generic)
 
+getPayload :: Message -> Payload
+getPayload (Message _ p) = p
+
 instance Binary Message
 
 serialize :: Int -> Payload -> ByteString
@@ -41,7 +44,7 @@ serialize magic payload = encode (Header magic $ B.length bs) <> bs
   where
     bs = encode payload
 
-data Relay = Relay ThreadId Address
+data Relay = Relay ThreadId Address deriving (Show)
 
 newtype Address = Addr SockAddr deriving (Show, Eq, Ord)
 
