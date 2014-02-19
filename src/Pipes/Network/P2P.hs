@@ -13,16 +13,13 @@ import Data.Monoid ((<>))
 import Data.Foldable (for_)
 import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
-
 import qualified Data.ByteString.Char8 as B8
 import Data.Set (Set, union)
 import qualified Data.Set as Set
 import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, ask)
 import Control.Monad.Trans (MonadIO, liftIO, lift)
-
 import Control.Error (MaybeT, fromMaybe, runMaybeT, hoistMaybe)
 import Control.Monad.Catch (MonadCatch, bracket_)
-
 import Pipes (Consumer, (>->), runEffect, await, each)
 import qualified Pipes.Prelude as P
 import qualified Pipes.Concurrent
@@ -45,7 +42,6 @@ import Network.Simple.SockAddr
   , send
   , recv
   )
-
 import Pipes.Network.P2P.Message
 import Pipes.Network.P2P.SocketReader
 
@@ -166,12 +162,17 @@ handle addr = bracket_ (register addr) (unregister addr) $ do
         let (obc, ibc) = broadcaster
         tid <- myThreadId
         void . atomically . Pipes.Concurrent.send obc $ Relay tid addr
-        void . forkIO $ runEffect (socketReader magic sock >-> P.map Right >-> toOutput ol) >> performGC
-        void . forkIO $ runEffect (fromInput ibc >-> P.map Left >-> toOutput ol) >> performGC
+        void . forkIO $ do
+            runEffect $ socketReader magic sock >-> P.map Right >-> toOutput ol
+            performGC
+        void . forkIO $ do
+            runEffect $ fromInput ibc >-> P.map Left >-> toOutput ol
+            performGC
     runEffect $ fromInput il >-> handler addr
 
 handler :: (MonadIO m, MonadReader NodeConn m)
-        => Address -> Consumer (Either Relay Payload) m r
+        => Address
+        -> Consumer (Either Relay Payload) m r
 handler addr = do
     NodeConn n@Node{magic, peers} _ sock <- ask
     tid <- liftIO myThreadId

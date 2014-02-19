@@ -34,9 +34,6 @@ instance Binary Payload
 
 data Message = Message Header Payload deriving (Show, Generic)
 
-getPayload :: Message -> Payload
-getPayload (Message _ p) = p
-
 instance Binary Message
 
 serialize :: Int -> Payload -> ByteString
@@ -60,7 +57,11 @@ instance Binary Address where
 
     get = getWord8 >>= \case
               0 -> Addr <$> (SockAddrInet <$> PortNum <$> get <*> get)
-              1 -> Addr <$> (SockAddrInet6 <$> PortNum <$> get <*> get <*> get <*> get)
+              1 -> Addr <$> (SockAddrInet6 <$> PortNum
+                                           <$> get
+                                           <*> get
+                                           <*> get
+                                           <*> get)
               _ -> Addr <$> SockAddrUnix <$> get
 
 encode :: Binary a => a -> ByteString
