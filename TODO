@@ -1,3 +1,5 @@
 - Remove closed Unix socket files when exiting.
 - Extract `Message` part in different package.
 - Command line interface and configurator (different package?).
+- Property tests: All nodes must be aware of each other in spite of chaos monkey.
+- Message delivery based on time.
