@@ -163,14 +163,12 @@ handle addr = bracket_ (register addr) (unregister addr) $ do
         let (obc, ibc) = broadcaster
         tid <- myThreadId
         void . atomically . Pipes.Concurrent.send obc $ Relay tid addr
-        a1 <- async $ do
+        void . fmap link . async $ do
             runEffect $ socketReader magic sock >-> P.map Right >-> toOutput ol
             performGC
-        link a1
-        a2 <- async $ do
+        void . fmap link . async $ do
             runEffect $ fromInput ibc >-> P.map Left >-> toOutput ol
             performGC
-        link a2
     runEffect $ fromInput il >-> handler addr
 
 handler :: (MonadIO m, MonadReader NodeConn m)
