@@ -1,8 +1,5 @@
-- Fix ADDR/GETADDR.
-- Guard magic bytes in messages for already connected peers.
 - When either reader or writer thread raises an exception, both threads and the
   parent should terminate.
 - Remove closed Unix socket files when exiting.
-- Handle `Decoding` errors: it should ignore input and resume listening.
-- Extract `Message` implementation in different package.
+- Extract `Message` part in different package.
 - Command line interface and configurator (different package?).

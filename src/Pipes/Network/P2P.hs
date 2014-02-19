@@ -4,35 +4,27 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
-module Pipes.Network.P2P
-  ( node
-  , launch
-  ) where
+module Pipes.Network.P2P (node, launch) where
 
 import Prelude hiding (log)
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
 import Control.Monad (void, guard, forever, when, unless)
 import Data.Monoid ((<>))
+import Data.Foldable (for_)
 import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
-import Data.Foldable (for_)
 
-import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
 import Data.Set (Set, union)
 import qualified Data.Set as Set
-import Control.Monad.Trans (MonadIO, liftIO, lift)
-import Control.Monad.Error (Error)
 import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, ask)
+import Control.Monad.Trans (MonadIO, liftIO, lift)
 
 import Control.Error (MaybeT, fromMaybe, runMaybeT, hoistMaybe)
 import Control.Monad.Catch (MonadCatch, bracket_)
-import Lens.Family2 ((^.))
 
-import Pipes (Producer, Consumer, (>->), runEffect, await, each)
+import Pipes (Consumer, (>->), runEffect, await, each)
 import qualified Pipes.Prelude as P
-import Pipes.Lift (errorP, runErrorP)
-import Pipes.Binary (decoded, DecodingError)
 import qualified Pipes.Concurrent
 import Pipes.Concurrent
   ( Buffer(Unbounded)
@@ -44,10 +36,7 @@ import Pipes.Concurrent
   , atomically
   , performGC
   )
-import Pipes.Network.TCP
-  ( fromSocket
-  , toSocket
-  )
+import Pipes.Network.TCP (toSocket)
 import Network.Simple.SockAddr
   ( Socket
   , SockAddr
@@ -58,6 +47,7 @@ import Network.Simple.SockAddr
   )
 
 import Pipes.Network.P2P.Message
+import Pipes.Network.P2P.SocketReader
 
 type Mailbox = (Output Relay, Input Relay)
 
@@ -168,29 +158,16 @@ unregister addr = do
     liftIO . modifyMVar_ peers $ pure . Set.delete addr
     liftIO $ logger False addr
 
--- TODO: How to get rid of this?
-instance Error (DecodingError, Producer ByteString IO ())
-
 handle :: (MonadIO m, MonadCatch m) => Address -> NodeConnT m ()
 handle addr = bracket_ (register addr) (unregister addr) $ do
-    NodeConn Node{broadcaster} _ sock <- ask
+    NodeConn Node{magic, broadcaster} _ sock <- ask
     (ol, il) <- liftIO $ spawn Unbounded
     liftIO $ do
         let (obc, ibc) = broadcaster
         tid <- myThreadId
-
-        -- Broadcast new connected address
         void . atomically . Pipes.Concurrent.send obc $ Relay tid addr
-
-        void . forkIO $ do
-            runEffect . void . runErrorP
-                      $ errorP (fromSocket sock 4096 ^. decoded)
-                    >-> P.map (Right . getPayload)
-                    >-> toOutput ol
-            performGC
-        void . forkIO $ do
-            runEffect $ fromInput ibc >-> P.map Left >-> toOutput ol
-            performGC
+        void . forkIO $ runEffect (socketReader magic sock >-> P.map Right >-> toOutput ol) >> performGC
+        void . forkIO $ runEffect (fromInput ibc >-> P.map Left >-> toOutput ol) >> performGC
     runEffect $ fromInput il >-> handler addr
 
 handler :: (MonadIO m, MonadReader NodeConn m)
