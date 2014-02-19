@@ -11,8 +11,9 @@ import Control.Applicative (Applicative, (<$>), (<*>), pure)
 import Control.Monad (void, guard, forever, when, unless)
 import Data.Monoid ((<>))
 import Data.Foldable (for_)
-import Control.Concurrent (forkIO, myThreadId)
+import Control.Concurrent (myThreadId)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
+import Control.Concurrent.Async (async, link)
 import qualified Data.ByteString.Char8 as B8
 import Data.Set (Set, union)
 import qualified Data.Set as Set
@@ -162,12 +163,14 @@ handle addr = bracket_ (register addr) (unregister addr) $ do
         let (obc, ibc) = broadcaster
         tid <- myThreadId
         void . atomically . Pipes.Concurrent.send obc $ Relay tid addr
-        void . forkIO $ do
+        a1 <- async $ do
             runEffect $ socketReader magic sock >-> P.map Right >-> toOutput ol
             performGC
-        void . forkIO $ do
+        link a1
+        a2 <- async $ do
             runEffect $ fromInput ibc >-> P.map Left >-> toOutput ol
             performGC
+        link a2
     runEffect $ fromInput il >-> handler addr
 
 handler :: (MonadIO m, MonadReader NodeConn m)

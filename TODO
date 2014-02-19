@@ -1,5 +1,3 @@
-- When either reader or writer thread raises an exception, both threads and the
-  parent should terminate.
 - Remove closed Unix socket files when exiting.
 - Extract `Message` part in different package.
 - Command line interface and configurator (different package?).
