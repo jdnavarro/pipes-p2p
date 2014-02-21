@@ -26,7 +26,7 @@ library
   ghc-options:         -Wall
   build-depends:       base >=4.6 && <4.8,
                        async,
-                       binary,
+                       binary >=0.7,
                        mtl,
                        bytestring,
                        containers,
