@@ -4,17 +4,16 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
-module Pipes.Network.P2P (node, launch, runNodes) where
+module Pipes.Network.P2P (node, launch) where
 
 import Prelude hiding (log)
 import Control.Applicative (Applicative, (<$>), (<*>), pure)
 import Control.Monad (void, guard, forever, when, unless)
 import Data.Monoid ((<>))
-import Data.Traversable (Traversable)
-import Data.Foldable (traverse_, for_)
+import Data.Foldable (for_)
 import Control.Concurrent (ThreadId, myThreadId, killThread)
 import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
-import Control.Concurrent.Async (mapConcurrently, async, link)
+import Control.Concurrent.Async (async, link)
 import qualified Data.ByteString.Char8 as B8
 import Data.Map (Map)
 import qualified Data.Map.Strict as Map
@@ -23,7 +22,7 @@ import qualified Data.Set as Set
 import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, ask)
 import Control.Monad.Trans (MonadIO, liftIO, lift)
 import Control.Error (MaybeT, fromMaybe, runMaybeT, hoistMaybe)
-import Control.Monad.Catch (MonadCatch, finally, bracket_)
+import Control.Monad.Catch (MonadCatch, bracket_)
 import Pipes (Consumer, (>->), runEffect, await, each)
 import qualified Pipes.Prelude as P
 import qualified Pipes.Concurrent
@@ -97,20 +96,13 @@ node mlog magic addr = Node magic (Addr addr) log
                        else "deleted: ")
                    <> B8.pack (show addr')
 
-
-runNodes :: Traversable t => t (Node, [SockAddr]) -> IO ()
-runNodes ns = void $ mapConcurrently (uncurry launch) ns
-
 launch :: (Functor m, Applicative m, MonadIO m, MonadCatch m)
        => Node
        -> [SockAddr]
        -> m ()
-launch n@Node{address, peers} addrs = do
+launch n@Node{address} addrs = do
     for_ addrs $ \addr -> connectFork addr $ runNodeConnT n outgoing addr
     serve (getSockAddr address) $ runNodeConnT n incoming
-    `finally` do ps <- liftIO $ readMVar peers
-                 traverse_ (liftIO . killThread) (Map.elems ps)
-
 
 outgoing :: (Functor m, MonadIO m, MonadCatch m) => NodeConnT m ()
 outgoing = void . runMaybeT $ do
