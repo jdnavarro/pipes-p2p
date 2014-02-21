@@ -10,10 +10,10 @@ import Pipes.Network.TCP (fromSocketN)
 
 import Pipes.Network.P2P.Message
 
-socketReader :: MonadIO m => Int -> Socket -> Producer Payload m ()
+socketReader :: MonadIO m => Int -> Socket -> Producer Message m ()
 socketReader magic sock = fromSocketN sock >+> beheader magic >+> decoder $ ()
 
-decoder :: MonadIO m => () -> Pipe ByteString Payload m ()
+decoder :: MonadIO m => () -> Pipe ByteString Message m ()
 decoder () = forever $ do
     pbs <- await
     forM_ (decode pbs) yield

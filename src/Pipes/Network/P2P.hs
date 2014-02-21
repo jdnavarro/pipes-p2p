@@ -128,16 +128,16 @@ incoming = void . runMaybeT $ do
                     lift $ handle addr tid)
         _ -> return ()
 
-deliver :: MonadIO m => Payload -> MaybeT (NodeConnT m) ()
-deliver payload = do NodeConn Node{magic} _ sock <- ask
-                     liftIO . send sock $ serialize magic payload
+deliver :: MonadIO m => Message -> MaybeT (NodeConnT m) ()
+deliver msg = do NodeConn Node{magic} _ sock <- ask
+                 liftIO . send sock $ serialize magic msg
 
-expect :: MonadIO m => Payload -> MaybeT (NodeConnT m) ()
-expect payload = do
-    payload' <- fetch
-    guard $ payload == payload'
+expect :: MonadIO m => Message -> MaybeT (NodeConnT m) ()
+expect msg = do
+    msg' <- fetch
+    guard $ msg == msg'
 
-fetch :: MonadIO m => MaybeT (NodeConnT m) Payload
+fetch :: MonadIO m => MaybeT (NodeConnT m) Message
 fetch = do
     NodeConn Node{magic} _ sock <- ask
     headerBS <- liftIO $ recv sock hSize
@@ -177,7 +177,7 @@ handle addr tid = bracket_ (register addr tid) (unregister addr tid) $ do
 
 handler :: (MonadIO m, MonadReader NodeConn m)
         => Address
-        -> Consumer (Either Relay Payload) m r
+        -> Consumer (Either Relay Message) m r
 handler addr = do
     NodeConn n@Node{magic, peers} _ sock <- ask
     tid <- liftIO myThreadId

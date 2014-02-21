@@ -24,22 +24,18 @@ instance Binary Header
 hSize :: Int
 hSize = B.length . encode $ Header 0 0
 
-data Payload = GETADDR
+data Message = GETADDR
              | ADDR Address
              | ME Address
              | ACK
                deriving (Show, Eq, Generic)
 
-instance Binary Payload
-
-data Message = Message Header Payload deriving (Show, Generic)
-
 instance Binary Message
 
-serialize :: Int -> Payload -> ByteString
-serialize magic payload = encode (Header magic $ B.length bs) <> bs
+serialize :: Int -> Message -> ByteString
+serialize magic msg = encode (Header magic $ B.length bs) <> bs
   where
-    bs = encode payload
+    bs = encode msg
 
 data Relay = Relay ThreadId Address deriving (Show)
 
