@@ -1,20 +1,21 @@
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE LambdaCase #-}
-module Pipes.Network.P2P.Message where
+module Pipes.Network.P2P.Message
+  ( Header(..)
+  , Relay(..)
+  , encode
+  , decode
+  , hSize
+  , serialize
+  ) where
 
-import Control.Applicative ((<$>), (<*>), (*>))
 import Data.Monoid ((<>))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
 import Data.ByteString.Lazy (toStrict, fromStrict)
-import Data.Binary (Binary(put,get), putWord8, getWord8)
+import Data.Binary (Binary)
 import qualified Data.Binary as Binary(encode,decodeOrFail)
 import Control.Concurrent (ThreadId)
 import GHC.Generics (Generic)
-import Network.Socket
-  ( SockAddr(SockAddrInet, SockAddrInet6, SockAddrUnix)
-  , PortNumber(PortNum)
-  )
 import Control.Error (hush)
 
 data Header = Header Int Int deriving (Show, Generic)
@@ -24,41 +25,12 @@ instance Binary Header
 hSize :: Int
 hSize = B.length . encode $ Header 0 0
 
-data Message = GETADDR
-             | ADDR Address
-             | ME Address
-             | ACK
-               deriving (Show, Eq, Generic)
-
-instance Binary Message
-
-serialize :: Int -> Message -> ByteString
+serialize :: Binary a => Int -> a -> ByteString
 serialize magic msg = encode (Header magic $ B.length bs) <> bs
   where
     bs = encode msg
 
-data Relay = Relay ThreadId Address deriving (Show)
-
-newtype Address = Addr SockAddr deriving (Show, Eq, Ord)
-
-getSockAddr :: Address -> SockAddr
-getSockAddr (Addr a) = a
-
-instance Binary Address where
-    put (Addr (SockAddrInet (PortNum port) host)) =
-        putWord8 0 *> put (port, host)
-    put (Addr (SockAddrInet6 (PortNum port) flow host scope)) =
-        putWord8 1 *> put (port, flow, host, scope)
-    put (Addr (SockAddrUnix str)) = putWord8 2 *> put str
-
-    get = getWord8 >>= \case
-              0 -> Addr <$> (SockAddrInet <$> PortNum <$> get <*> get)
-              1 -> Addr <$> (SockAddrInet6 <$> PortNum
-                                           <$> get
-                                           <*> get
-                                           <*> get
-                                           <*> get)
-              _ -> Addr <$> SockAddrUnix <$> get
+data Relay a = Relay ThreadId a deriving (Show)
 
 encode :: Binary a => a -> ByteString
 encode = toStrict . Binary.encode

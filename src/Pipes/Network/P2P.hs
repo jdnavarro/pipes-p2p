@@ -1,28 +1,44 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase #-}
-module Pipes.Network.P2P (node, launch) where
+{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+module Pipes.Network.P2P
+  (
+  -- * Node
+    Node(..)
+  , NodeConn(..)
+  , NodeConnT
+  , Connection(..)
+  , Handlers(..)
+  , node
+  , launch
+  , runNodeConn
+  -- * handshake
+  , deliver
+  , expect
+  , fetch
+  -- * Re-exports
+  , Relay(..)
+  , serialize
+  , MonadIO
+  , liftIO
+  , MonadCatch
+  ) where
 
 import Prelude hiding (log)
-import Control.Applicative (Applicative, (<$>), (<*>), pure)
-import Control.Monad (void, guard, forever, when, unless)
+import Control.Applicative (Applicative, (<$>))
+import Control.Monad (void, guard)
 import Data.Monoid ((<>))
 import Data.Foldable (for_)
-import Control.Concurrent (ThreadId, myThreadId, killThread)
-import Control.Concurrent.MVar (MVar, newMVar, readMVar, modifyMVar_)
+import Control.Concurrent (myThreadId)
 import Control.Concurrent.Async (async, link)
 import qualified Data.ByteString.Char8 as B8
-import Data.Map (Map)
-import qualified Data.Map.Strict as Map
-import Data.Set (union)
-import qualified Data.Set as Set
-import Control.Monad.Reader (ReaderT, MonadReader, runReaderT, ask)
-import Control.Monad.Trans (MonadIO, liftIO, lift)
-import Control.Error (MaybeT, fromMaybe, runMaybeT, hoistMaybe)
+import Data.Binary (Binary)
+import Control.Monad.Reader (ReaderT(..), MonadReader, runReaderT, ask)
+import Control.Error (MaybeT, fromMaybe, hoistMaybe)
 import Control.Monad.Catch (MonadCatch, bracket_)
-import Pipes (Consumer, (>->), runEffect, await, each)
+import Pipes (Producer, Consumer, (>->), runEffect, MonadIO, liftIO)
 import qualified Pipes.Prelude as P
 import qualified Pipes.Concurrent
 import Pipes.Concurrent
@@ -35,7 +51,6 @@ import Pipes.Concurrent
   , atomically
   , performGC
   )
-import Pipes.Network.TCP (toSocket)
 import Network.Simple.SockAddr
   ( Socket
   , SockAddr
@@ -47,45 +62,61 @@ import Network.Simple.SockAddr
 import Pipes.Network.P2P.Message
 import Pipes.Network.P2P.SocketReader
 
-type Mailbox = (Output Relay, Input Relay)
 
-type Logger = Bool -> Address -> IO ()
 
-data Node = Node
-    { magic       :: Int
-    , address     :: Address
-    , logger      :: Logger
-    , peers       :: MVar (Map Address ThreadId)
-    , broadcaster :: Mailbox
+data Node a = Node
+    { magic         :: Int
+    , address       :: SockAddr
+    , logger        :: Logger a
+    , handlers      :: Handlers a
+    , broadcaster   :: Mailbox a
     }
 
-data NodeConn = NodeConn Node SockAddr Socket
+type Mailbox a = (Output (Relay a), Input (Relay a))
+type Logger a = Bool -> a -> IO ()
 
-newtype NodeConnT m r = NodeConnT
-    { unNodeConnT :: ReaderT NodeConn m r
+data Handlers a = Handlers
+    { ohandshake   :: HandShaker a
+    , ihandshake   :: HandShaker a
+    , onConnect    :: Handler a
+    , onDisconnect :: Handler a
+    , msgConsumer  :: forall m . a -> Consumer (Either (Relay a) a)
+                                               (NodeConnT a m)
+                                               ()
+    }
+
+type HandShaker a = forall m . (Functor m, MonadIO m, MonadCatch m)
+                 => NodeConnT a m (Maybe a)
+type Handler a = forall m . MonadIO m => m ()
+
+data NodeConn a = NodeConn
+    { getNode :: Node a
+    , getConn :: Connection
+    }
+
+data Connection = Connection SockAddr Socket
+
+newtype NodeConnT a m r = NodeConnT
+    { runNodeConnT :: ReaderT (NodeConn a) m r
     } deriving ( Functor
                , Applicative
                , Monad
                , MonadIO
                , MonadCatch
-               , MonadReader NodeConn
+               , MonadReader (NodeConn a)
                )
 
-runNodeConnT :: MonadIO m => Node -> NodeConnT m a -> SockAddr -> Socket -> m a
-runNodeConnT n nt addr sock =
-    runReaderT (unNodeConnT nt) (NodeConn n addr sock)
-
-node :: (Functor m, Applicative m, MonadIO m)
-     => Maybe Logger
-     -> Int
+node :: (Functor m, Applicative m, MonadIO m, Binary a, Show a)
+     => Int
+     -> Maybe (Logger a)
+     -> Handlers a
      -> SockAddr
-     -> m Node
-node mlog magic addr = Node magic (Addr addr) log
-                   <$> liftIO (newMVar Map.empty)
-                   <*> liftIO (spawn Unbounded)
+     -> m (Node a)
+node magic mlog handlers addr =
+    Node magic addr log handlers <$> liftIO (spawn Unbounded)
   where
     log = fromMaybe defaultLogger mlog
-    defaultLogger flag (Addr addr') =
+    defaultLogger flag addr' =
         B8.putStrLn $ "Node "
                    <> B8.pack (show addr)
                    <> ": "
@@ -95,104 +126,60 @@ node mlog magic addr = Node magic (Addr addr) log
                        else "deleted: ")
                    <> B8.pack (show addr')
 
-launch :: (Functor m, Applicative m, MonadIO m, MonadCatch m)
-       => Node
-       -> [SockAddr]
-       -> m ()
+launch :: (Functor m, Applicative m, MonadIO m, MonadCatch m, Binary a)
+       => Node a -> [SockAddr] -> m ()
 launch n@Node{address} addrs = do
-    for_ addrs $ \addr -> connectFork addr $ runNodeConnT n outgoing addr
-    serve (getSockAddr address) $ runNodeConnT n incoming
+    for_ addrs $ \addr -> connectFork addr $ runNodeConn n True addr
+    serve address $ runNodeConn n False
 
-outgoing :: (Functor m, MonadIO m, MonadCatch m) => NodeConnT m ()
-outgoing = void . runMaybeT $ do
-    NodeConn Node{address} addr _ <- ask
-    deliver $ ME address
-    expect . ME $ Addr addr
-    deliver ACK
-    expect ACK
-    deliver GETADDR
-    tid <- liftIO myThreadId
-    lift $ handle (Addr addr) tid
+runNodeConn :: (Functor m, MonadIO m, MonadCatch m, Binary a)
+            => Node a
+            -> Bool
+            -> SockAddr
+            -> Socket
+            -> m ()
+runNodeConn n isOut addr sock =
+    runReaderT (runNodeConnT go) (NodeConn n $ Connection addr sock)
+  where
+    go = do NodeConn Node{handlers} _ <- ask
+            (if isOut
+             then ohandshake handlers
+             else ihandshake handlers) >>= maybe (return ()) handle
 
-incoming :: (Functor m, MonadIO m, MonadCatch m) => NodeConnT m ()
-incoming = void . runMaybeT $ do
-    NodeConn Node{address, peers} _ _ <- ask
-    fetch >>= \case
-        ME addr@(Addr _) -> do
-           ps <- liftIO $ readMVar peers
-           when (Map.notMember addr ps)
-                (do deliver $ ME address
-                    deliver ACK
-                    expect ACK
-                    tid <- liftIO myThreadId
-                    lift $ handle addr tid)
-        _ -> return ()
-
-deliver :: MonadIO m => Message -> MaybeT (NodeConnT m) ()
-deliver msg = do NodeConn Node{magic} _ sock <- ask
+deliver :: (Binary a, MonadIO m) => a -> MaybeT (NodeConnT a m) ()
+deliver msg = do NodeConn (Node{magic}) (Connection _ sock) <- ask
                  liftIO . send sock $ serialize magic msg
 
-expect :: MonadIO m => Message -> MaybeT (NodeConnT m) ()
+expect :: (MonadIO m, Binary a, Eq a) => a -> MaybeT (NodeConnT a m) ()
 expect msg = do
     msg' <- fetch
     guard $ msg == msg'
 
-fetch :: MonadIO m => MaybeT (NodeConnT m) Message
+fetch :: (MonadIO m, Binary a) => MaybeT (NodeConnT a m) a
 fetch = do
-    NodeConn Node{magic} _ sock <- ask
+    NodeConn (Node{magic}) (Connection _ sock) <- ask
     headerBS <- liftIO $ recv sock hSize
     (Header magic' nbytes) <- hoistMaybe $ decode headerBS
     guard $ magic == magic'
     bs <- liftIO $ recv sock nbytes
     hoistMaybe $ decode bs
 
-register :: MonadIO m => Address -> ThreadId -> NodeConnT m ()
-register addr tid = do
-    NodeConn Node{peers, logger} _ _ <- ask
-    liftIO . modifyMVar_ peers $ pure . Map.insert addr tid
-    liftIO $ logger True addr
-
--- | Assumes the thread has already been killed
-unregister :: MonadIO m => Address -> ThreadId -> NodeConnT m ()
-unregister addr tid = do
-    NodeConn Node{peers, logger} _ _ <- ask
-    liftIO $ do killThread tid
-                modifyMVar_ peers $ pure . Map.delete addr
-                logger False addr
-
-handle :: (MonadIO m, MonadCatch m) => Address -> ThreadId -> NodeConnT m ()
-handle addr tid = bracket_ (register addr tid) (unregister addr tid) $ do
-    NodeConn Node{magic, broadcaster} _ sock <- ask
-    (ol, il) <- liftIO $ spawn Unbounded
-    liftIO $ do
-        let (obc, ibc) = broadcaster
-        void . atomically . Pipes.Concurrent.send obc $ Relay tid addr
-        void . fmap link . async $ do
-            runEffect $ socketReader magic sock >-> P.map Right >-> toOutput ol
-            performGC
-        void . fmap link . async $ do
-            runEffect $ fromInput ibc >-> P.map Left >-> toOutput ol
-            performGC
-    runEffect $ fromInput il >-> handler addr
-
-handler :: (MonadIO m, MonadReader NodeConn m)
-        => Address
-        -> Consumer (Either Relay Message) m r
-handler addr = do
-    NodeConn n@Node{magic, peers} _ sock <- ask
-    tid <- liftIO myThreadId
-    forever $ await >>= \case
-        Right GETADDR -> do
-            ps <- liftIO $ Map.delete addr <$> readMVar peers
-            runEffect $ each (Map.keys ps)
-                    >-> P.map (serialize magic . ADDR)
-                    >-> toSocket sock
-        Right (ADDR a@(Addr a')) -> do
-            ps <- liftIO $ readMVar peers
-            unless (Set.null $ Set.fromList [a, addr] `union` Map.keysSet ps)
-                   (liftIO . void $ connectFork a'
-                                  $ runNodeConnT n outgoing a')
-        Left (Relay tid' a) ->
-            unless (tid' == tid)
-                   (liftIO . send sock . serialize magic $ ADDR a)
-        _ -> return ()
+handle :: forall a m . (MonadIO m, MonadCatch m, Binary a)
+       => a -> NodeConnT a m ()
+handle msg = do
+    NodeConn Node{magic, handlers, broadcaster} (Connection _ sock) <- ask
+    let Handlers{onConnect, onDisconnect, msgConsumer} = handlers
+    bracket_ onConnect onDisconnect $ do
+        (ol, il) <- liftIO $ spawn Unbounded
+        liftIO $ do
+            let (obc, ibc) = broadcaster
+            tid <- myThreadId
+            void . atomically . Pipes.Concurrent.send obc $ Relay tid msg
+            void . fmap link . async $ do
+                runEffect $ (socketReader magic sock :: Producer a IO ())
+                        >-> P.map Right >-> toOutput ol
+                performGC
+            void . fmap link . async $ do
+                runEffect $ fromInput ibc >-> P.map Left >-> toOutput ol
+                performGC
+        runEffect $ fromInput il >-> msgConsumer msg

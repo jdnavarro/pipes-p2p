@@ -3,3 +3,4 @@
 - Property tests: All nodes must be aware of each other in spite of chaos monkey.
 - Message delivery based on time.
 - Better logger in separate module.
+- Make `Header` a typeclass.
