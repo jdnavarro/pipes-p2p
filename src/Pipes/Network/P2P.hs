@@ -80,14 +80,13 @@ data Handlers a = Handlers
     , ihandshake   :: HandShaker a
     , onConnect    :: Handler a
     , onDisconnect :: Handler a
-    , msgConsumer  :: forall m . a -> Consumer (Either (Relay a) a)
-                                               (NodeConnT a m)
-                                               ()
+    , msgConsumer  :: forall m . (MonadIO m, MonadCatch m)
+                   => a -> Consumer (Either (Relay a) a) (NodeConnT a m) ()
     }
 
 type HandShaker a = forall m . (Functor m, MonadIO m, MonadCatch m)
                  => NodeConnT a m (Maybe a)
-type Handler a = forall m . MonadIO m => m ()
+type Handler a = forall m . MonadIO m => a -> m ()
 
 data NodeConn a = NodeConn
     { getNode :: Node a
@@ -169,7 +168,7 @@ handle :: forall a m . (MonadIO m, MonadCatch m, Binary a)
 handle msg = do
     NodeConn Node{magic, handlers, broadcaster} (Connection _ sock) <- ask
     let Handlers{onConnect, onDisconnect, msgConsumer} = handlers
-    bracket_ onConnect onDisconnect $ do
+    bracket_ (onConnect msg) (onDisconnect msg) $ do
         (ol, il) <- liftIO $ spawn Unbounded
         liftIO $ do
             let (obc, ibc) = broadcaster
