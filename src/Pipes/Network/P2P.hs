@@ -102,10 +102,10 @@ newtype NodeConnT a m r = NodeConnT
 
 node :: (Functor m, Applicative m, MonadIO m, Binary a, Show a)
      => Int
-     -> Handlers a
      -> SockAddr
+     -> Handlers a
      -> m (Node a)
-node magic handlers addr =
+node magic addr handlers =
     Node magic addr handlers <$> liftIO (spawn Unbounded)
 
 launch :: (Functor m, Applicative m, MonadIO m, MonadCatch m, Binary a)
