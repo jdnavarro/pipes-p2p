@@ -26,17 +26,14 @@ module Pipes.Network.P2P
   , MonadCatch
   ) where
 
-import Prelude hiding (log)
 import Control.Applicative (Applicative, (<$>))
 import Control.Monad (void, guard)
-import Data.Monoid ((<>))
 import Data.Foldable (for_)
 import Control.Concurrent (myThreadId)
 import Control.Concurrent.Async (async, link)
-import qualified Data.ByteString.Char8 as B8
 import Data.Binary (Binary)
 import Control.Monad.Reader (ReaderT(..), MonadReader, runReaderT, ask)
-import Control.Error (MaybeT, fromMaybe, hoistMaybe)
+import Control.Error (MaybeT, hoistMaybe)
 import Control.Monad.Catch (MonadCatch, bracket_)
 import Pipes (Producer, Consumer, (>->), runEffect, MonadIO, liftIO)
 import qualified Pipes.Prelude as P
@@ -67,13 +64,11 @@ import Pipes.Network.P2P.SocketReader
 data Node a = Node
     { magic         :: Int
     , address       :: SockAddr
-    , logger        :: Logger a
     , handlers      :: Handlers a
     , broadcaster   :: Mailbox a
     }
 
 type Mailbox a = (Output (Relay a), Input (Relay a))
-type Logger a = Bool -> a -> IO ()
 
 data Handlers a = Handlers
     { ohandshake   :: HandShaker a
@@ -107,23 +102,11 @@ newtype NodeConnT a m r = NodeConnT
 
 node :: (Functor m, Applicative m, MonadIO m, Binary a, Show a)
      => Int
-     -> Maybe (Logger a)
      -> Handlers a
      -> SockAddr
      -> m (Node a)
-node magic mlog handlers addr =
-    Node magic addr log handlers <$> liftIO (spawn Unbounded)
-  where
-    log = fromMaybe defaultLogger mlog
-    defaultLogger flag addr' =
-        B8.putStrLn $ "Node "
-                   <> B8.pack (show addr)
-                   <> ": "
-                   <> "Address "
-                   <> (if flag
-                       then "added: "
-                       else "deleted: ")
-                   <> B8.pack (show addr')
+node magic handlers addr =
+    Node magic addr handlers <$> liftIO (spawn Unbounded)
 
 launch :: (Functor m, Applicative m, MonadIO m, MonadCatch m, Binary a)
        => Node a -> [SockAddr] -> m ()
