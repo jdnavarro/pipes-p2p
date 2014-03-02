@@ -1,8 +1,9 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+
 module Pipes.Network.P2P
   (
   -- * Node
@@ -27,16 +28,34 @@ module Pipes.Network.P2P
   ) where
 
 import Control.Applicative (Applicative, (<$>))
-import Control.Monad (void, guard)
-import Data.Foldable (for_)
-import Control.Concurrent (myThreadId)
+import Control.Monad (forever, void, unless, guard)
+import Data.Monoid ((<>))
+import Data.Foldable (for_, forM_)
+import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.Async (async, link)
+import GHC.Generics (Generic)
+import Data.ByteString (ByteString)
+import qualified Data.ByteString as B
+import Data.ByteString.Lazy (toStrict, fromStrict)
 import Data.Binary (Binary)
+import qualified Data.Binary as Binary(encode,decodeOrFail)
 import Control.Monad.Reader (ReaderT(..), MonadReader, runReaderT, ask)
-import Control.Error (MaybeT, hoistMaybe)
+import Control.Error (MaybeT, hoistMaybe, hush)
 import Control.Monad.Catch (MonadCatch, bracket_)
-import Pipes (Producer, Consumer, (>->), runEffect, MonadIO, liftIO)
+import Pipes
+  ( Pipe
+  , Producer
+  , Consumer
+  , (>->)
+  , runEffect
+  , yield
+  , await
+  , MonadIO
+  , liftIO
+  )
+import Pipes.Core (Proxy, (>+>), request, respond)
 import qualified Pipes.Prelude as P
+import Pipes.Network.TCP (fromSocketN)
 import qualified Pipes.Concurrent
 import Pipes.Concurrent
   ( Buffer(Unbounded)
@@ -56,9 +75,6 @@ import Network.Simple.SockAddr
   , send
   , recv
   )
-import Pipes.Network.P2P.Message
-import Pipes.Network.P2P.SocketReader
-
 
 
 data Node a = Node
@@ -165,3 +181,41 @@ handle msg = do
                 runEffect $ fromInput ibc >-> P.map Left >-> toOutput ol
                 performGC
         runEffect $ fromInput il >-> msgConsumer msg
+
+data Header = Header Int Int deriving (Show, Generic)
+
+instance Binary Header
+
+hSize :: Int
+hSize = B.length . encode $ Header 0 0
+
+serialize :: Binary a => Int -> a -> ByteString
+serialize magic msg = encode (Header magic $ B.length bs) <> bs
+  where
+    bs = encode msg
+
+data Relay a = Relay ThreadId a deriving (Show)
+
+encode :: Binary a => a -> ByteString
+encode = toStrict . Binary.encode
+
+decode :: Binary a => ByteString -> Maybe a
+decode = fmap third . hush . Binary.decodeOrFail . fromStrict
+  where
+    third (_,_,x) = x
+
+socketReader :: (MonadIO m, Binary a) => Int -> Socket -> Producer a m ()
+socketReader magic sock = fromSocketN sock >+> beheader magic >+> decoder $ ()
+
+decoder :: (MonadIO m, Binary a) => () -> Pipe ByteString a m ()
+decoder () = forever $ do
+    pbs <- await
+    forM_ (decode pbs) yield
+
+beheader :: MonadIO m => Int -> () -> Proxy Int ByteString () ByteString m ()
+beheader magic () = forever $ do
+    hbs <- request hSize
+    case decode hbs of
+        Nothing -> return ()
+        Just (Header magic' nbytes) -> unless (magic /= magic')
+                                     $ request nbytes >>= respond

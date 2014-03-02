@@ -14,13 +14,14 @@ maintainer:          j@dannynavarro.net
 category:            Network, Pipes
 build-type:          Simple
 cabal-version:       >=1.10
-tested-with:         GHC == 7.6.3, GHC == 7.8.0.20140204
-extra-source-files:  examples/demo.hs
+tested-with:         GHC == 7.6.3
+
+source-repository head
+    type: git
+    location: https://github.com/jdnavarro/pipes-p2p
 
 library
-  exposed-modules:     Pipes.Network.P2P,
-                       Pipes.Network.P2P.Message
-  other-modules:       Pipes.Network.P2P.SocketReader
+  exposed-modules:     Pipes.Network.P2P
   hs-source-dirs:      src
   default-language:    Haskell2010
   ghc-options:         -Wall
@@ -29,7 +30,6 @@ library
                        binary >=0.7,
                        mtl,
                        bytestring,
-                       containers,
                        errors,
                        exceptions,
                        pipes >= 0.4,
@@ -37,7 +37,3 @@ library
                        pipes-network >= 0.6,
                        network,
                        network-simple-sockaddr
-
-source-repository head
-    Type: git
-    Location: https://github.com/jdnavarro/pipes-p2p
