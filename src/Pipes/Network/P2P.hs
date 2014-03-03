@@ -107,6 +107,7 @@ node :: (Functor m, Applicative m, MonadIO m, Binary a, Show a)
      -> m (Node a)
 node magic addr handlers =
     Node magic addr handlers <$> liftIO (spawn Unbounded)
+{-# INLINABLE node #-}
 
 -- | Functions to define the behavior of a 'Node'.
 data Handlers a = Handlers
@@ -155,6 +156,7 @@ launch :: (Functor m, Applicative m, MonadIO m, MonadCatch m, Binary a)
 launch n@Node{address} addrs = do
     for_ addrs $ \addr -> connectFork addr $ runNodeConn n True addr
     serve address $ runNodeConn n False
+{-# INLINABLE launch #-}
 
 -- | Connect a 'Node' to the given pair of 'SockAddr', 'Socket'.
 runNodeConn :: (Functor m, MonadIO m, MonadCatch m, Binary a)
@@ -174,6 +176,7 @@ runNodeConn n isOut addr sock =
             (if isOut
              then ohandshake handlers
              else ihandshake handlers) >>= maybe (return ()) handle
+{-# INLINABLE runNodeConn #-}
 
 -- * Handshaking utilities
 
@@ -188,6 +191,7 @@ deliver :: (Binary a, MonadIO m)
         -> MaybeT (NodeConnT a m) ()
 deliver msg = do NodeConn (Node{magic}) (Connection _ sock) <- ask
                  liftIO . send sock $ serialize magic msg
+{-# INLINABLE deliver #-}
 
 -- | Receive a message and make sure it's the same as the expected message.
 expect :: (MonadIO m, Binary a, Eq a)
@@ -197,6 +201,7 @@ expect :: (MonadIO m, Binary a, Eq a)
 expect msg = do
     msg' <- fetch
     guard $ msg == msg'
+{-# INLINABLE expect #-}
 
 {-| Fetch next message.
 
@@ -211,6 +216,7 @@ fetch = do
     guard $ magic == magic'
     bs <- liftIO $ recv sock nbytes
     hoistMaybe $ decode bs
+{-# INLINABLE fetch #-}
 
 -- * Messaging
 
@@ -225,6 +231,7 @@ serialize :: Binary a
 serialize magic msg = encode (Header magic $ B.length bs) <> bs
   where
     bs = encode msg
+{-# INLINE serialize #-}
 
 -- * Internal
 
@@ -263,16 +270,19 @@ instance Binary Header
 
 hSize :: Int
 hSize = B.length . encode $ Header 0 0
+{-# INLINE hSize #-}
 
 -- ** Socket reader
 
 socketReader :: (MonadIO m, Binary a) => Int -> Socket -> Producer a m ()
 socketReader magic sock = fromSocketN sock >+> beheader magic >+> decoder $ ()
+{-# INLINABLE socketReader #-}
 
 decoder :: (MonadIO m, Binary a) => () -> Pipe ByteString a m ()
 decoder () = forever $ do
     pbs <- await
     forM_ (decode pbs) yield
+{-# INLINABLE decoder #-}
 
 beheader :: MonadIO m => Int -> () -> Proxy Int ByteString () ByteString m ()
 beheader magic () = forever $ do
@@ -281,14 +291,16 @@ beheader magic () = forever $ do
         Nothing -> return ()
         Just (Header magic' nbytes) -> unless (magic /= magic')
                                      $ request nbytes >>= respond
+{-# INLINABLE beheader #-}
 
 -- ** Strict Binary
 
 encode :: Binary a => a -> ByteString
 encode = toStrict . Binary.encode
+{-# INLINE encode #-}
 
 decode :: Binary a => ByteString -> Maybe a
 decode = fmap third . hush . Binary.decodeOrFail . fromStrict
   where
     third (_,_,x) = x
-
+{-# INLINE decode #-}
