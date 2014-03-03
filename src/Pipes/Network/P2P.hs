@@ -5,6 +5,10 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
+{-| Use 'node' to create a 'Node' with your desired settings and then run it
+    with 'launch'.
+-}
+
 module Pipes.Network.P2P
   (
   -- * Nodes and Connections
