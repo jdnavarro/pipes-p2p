@@ -1,20 +1,17 @@
 name:                pipes-p2p
 version:             0.1
-synopsis:            Library to create P2P networks with pipes.
-description:         Toy P2P network where nodes just exchange network
-                     addresses. For now this can be used as boilerplate code
-                     for developing P2P networks. In the future it should be
-                     possible to pass around serialized pipes which perform
-                     computations.
+cabal-version:       >=1.10
+tested-with:         GHC == 7.6.3
+build-type:          Simple
 homepage:            https://github.com/jdnavarro/pipes-p2p
 license:             BSD3
 license-file:        LICENSE
 author:              Danny Navarro
 maintainer:          j@dannynavarro.net
 category:            Network, Pipes
-build-type:          Simple
-cabal-version:       >=1.10
-tested-with:         GHC == 7.6.3
+synopsis:            P2P network nodes with pipes
+description:
+  Library to facilitate the creation of custom P2P networks using `pipes`.
 
 source-repository head
     type: git

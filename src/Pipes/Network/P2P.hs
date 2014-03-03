@@ -1,3 +1,4 @@
+{-# OPTIONS_HADDOCK ignore-exports #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE DeriveGeneric #-}
@@ -6,22 +7,23 @@
 
 module Pipes.Network.P2P
   (
-  -- * Node
+  -- * Nodes and Connections
     Node(..)
+  , node
   , NodeConn(..)
   , NodeConnT
   , Connection(..)
   , Handlers(..)
-  , node
   , launch
   , runNodeConn
-  -- * handshake
+  -- * Handshaking utilities
   , deliver
   , expect
   , fetch
-  -- * Re-exports
+  -- * Messaging
   , Relay(..)
   , serialize
+  -- * Re-exports
   , MonadIO
   , liftIO
   , MonadCatch
@@ -76,36 +78,63 @@ import Network.Simple.SockAddr
   , recv
   )
 
+-- * Node and Connections
 
+{-| A P2P node.
+
+    The constructor is exported for pattern matching purposes. Under normal
+    circumstances, you should use 'node' for 'Node' creation.
+-}
 data Node a = Node
-    { magic         :: Int
-    , address       :: SockAddr
-    , handlers      :: Handlers a
-    , broadcaster   :: Mailbox a
+    { magic       :: Int
+    -- ^ Magic bytes.
+    , address     :: SockAddr
+    -- ^ Listening address.
+    , handlers    :: Handlers a
+    -- ^ Functions to define the behavior of the 'Node'.
+    , broadcaster :: Mailbox a
+    -- ^ 'MailBox' to relay internal messages.
     }
 
-type Mailbox a = (Output (Relay a), Input (Relay a))
+-- | Smart constructor to create a 'Node'.
+node :: (Functor m, Applicative m, MonadIO m, Binary a, Show a)
+     => Int
+     -- ^ Magic bytes.
+     -> SockAddr
+     -- ^ Listening address.
+     -> Handlers a
+     -- ^ Functions to define the behavior of the 'Node'.
+     -> m (Node a)
+node magic addr handlers =
+    Node magic addr handlers <$> liftIO (spawn Unbounded)
 
+-- | Functions to define the behavior of a 'Node'.
 data Handlers a = Handlers
     { ohandshake   :: HandShaker a
+    -- ^ What to do for an outgoing connection handshake.
     , ihandshake   :: HandShaker a
+    -- ^ What to do for an incoming connection handshake.
     , onConnect    :: Handler a
+    -- ^ Action to perform after a connection has been established.
     , onDisconnect :: Handler a
+    -- ^ Action to perform after a connection has ended.
     , msgConsumer  :: forall m . (MonadIO m, MonadCatch m)
                    => a -> Consumer (Either (Relay a) a) (NodeConnT a m) ()
+    -- ^ This consumes incoming messages both from other nodes' connections, as
+    --   @'Left ('Relay' a)@, and from messages coming from the connected socket, as
+    --   @'Right' a@.
+    --   This is only used after a handshake has been successful.
     }
 
-type HandShaker a = forall m . (Functor m, MonadIO m, MonadCatch m)
-                 => NodeConnT a m (Maybe a)
-type Handler a = forall m . MonadIO m => a -> m ()
+-- | A convenient data type to put a 'Node' and a 'Connection' together.
+data NodeConn a = NodeConn (Node a) (Connection)
 
-data NodeConn a = NodeConn
-    { getNode :: Node a
-    , getConn :: Connection
-    }
-
+{-| A convenient data type to put together a network address and its
+    corresponding socket.
+-}
 data Connection = Connection SockAddr Socket
 
+-- | Convenient wrapper for a 'ReaderT' monad containing a 'NodeConn'.
 newtype NodeConnT a m r = NodeConnT
     { runNodeConnT :: ReaderT (NodeConn a) m r
     } deriving ( Functor
@@ -116,25 +145,27 @@ newtype NodeConnT a m r = NodeConnT
                , MonadReader (NodeConn a)
                )
 
-node :: (Functor m, Applicative m, MonadIO m, Binary a, Show a)
-     => Int
-     -> SockAddr
-     -> Handlers a
-     -> m (Node a)
-node magic addr handlers =
-    Node magic addr handlers <$> liftIO (spawn Unbounded)
-
+-- | Launch a 'Node'.
 launch :: (Functor m, Applicative m, MonadIO m, MonadCatch m, Binary a)
-       => Node a -> [SockAddr] -> m ()
+       => Node a
+       -- ^
+       -> [SockAddr]
+       -- ^ Addresses to try to connect on launch.
+       -> m ()
 launch n@Node{address} addrs = do
     for_ addrs $ \addr -> connectFork addr $ runNodeConn n True addr
     serve address $ runNodeConn n False
 
+-- | Connect a 'Node' to the given pair of 'SockAddr', 'Socket'.
 runNodeConn :: (Functor m, MonadIO m, MonadCatch m, Binary a)
             => Node a
+            -- ^
             -> Bool
+            -- ^ Whether this is an outgoing connection.
             -> SockAddr
+            -- ^ Address to connect to.
             -> Socket
+            -- ^ Socket to connect to.
             -> m ()
 runNodeConn n isOut addr sock =
     runReaderT (runNodeConnT go) (NodeConn n $ Connection addr sock)
@@ -144,15 +175,34 @@ runNodeConn n isOut addr sock =
              then ohandshake handlers
              else ihandshake handlers) >>= maybe (return ()) handle
 
-deliver :: (Binary a, MonadIO m) => a -> MaybeT (NodeConnT a m) ()
+-- * Handshaking utilities
+
+{-| Send an expected message.
+
+    The message is automatically serialized and prepended with the magic
+    bytes.
+-}
+deliver :: (Binary a, MonadIO m)
+        => a
+        -- ^ Message
+        -> MaybeT (NodeConnT a m) ()
 deliver msg = do NodeConn (Node{magic}) (Connection _ sock) <- ask
                  liftIO . send sock $ serialize magic msg
 
-expect :: (MonadIO m, Binary a, Eq a) => a -> MaybeT (NodeConnT a m) ()
+-- | Receive a message and make sure it's the same as the expected message.
+expect :: (MonadIO m, Binary a, Eq a)
+       => a
+       -- ^ Message
+       -> MaybeT (NodeConnT a m) ()
 expect msg = do
     msg' <- fetch
     guard $ msg == msg'
 
+{-| Fetch next message.
+
+    Uses the length bytes in the header to pull the exact number of bytes of
+    the message.
+-}
 fetch :: (MonadIO m, Binary a) => MaybeT (NodeConnT a m) a
 fetch = do
     NodeConn (Node{magic}) (Connection _ sock) <- ask
@@ -162,6 +212,29 @@ fetch = do
     bs <- liftIO $ recv sock nbytes
     hoistMaybe $ decode bs
 
+-- * Messaging
+
+-- | Internal message to relay to the rest of connections in the node.
+data Relay a = Relay ThreadId a deriving (Show)
+
+-- | Encodes and prepends a 'Header' to a message.
+serialize :: Binary a
+          => Int -- ^ Magic bytes.
+          -> a   -- ^ Message.
+          -> ByteString
+serialize magic msg = encode (Header magic $ B.length bs) <> bs
+  where
+    bs = encode msg
+
+-- * Internal
+
+type Mailbox a = (Output (Relay a), Input (Relay a))
+type HandShaker a = forall m . (Functor m, MonadIO m, MonadCatch m)
+                 => NodeConnT a m (Maybe a)
+type Handler a = forall m . MonadIO m => a -> m ()
+
+
+-- | Coordinates the handlers in the 'Node'.
 handle :: forall a m . (MonadIO m, MonadCatch m, Binary a)
        => a -> NodeConnT a m ()
 handle msg = do
@@ -182,6 +255,8 @@ handle msg = do
                 performGC
         runEffect $ fromInput il >-> msgConsumer msg
 
+-- ** Header
+
 data Header = Header Int Int deriving (Show, Generic)
 
 instance Binary Header
@@ -189,20 +264,7 @@ instance Binary Header
 hSize :: Int
 hSize = B.length . encode $ Header 0 0
 
-serialize :: Binary a => Int -> a -> ByteString
-serialize magic msg = encode (Header magic $ B.length bs) <> bs
-  where
-    bs = encode msg
-
-data Relay a = Relay ThreadId a deriving (Show)
-
-encode :: Binary a => a -> ByteString
-encode = toStrict . Binary.encode
-
-decode :: Binary a => ByteString -> Maybe a
-decode = fmap third . hush . Binary.decodeOrFail . fromStrict
-  where
-    third (_,_,x) = x
+-- ** Socket reader
 
 socketReader :: (MonadIO m, Binary a) => Int -> Socket -> Producer a m ()
 socketReader magic sock = fromSocketN sock >+> beheader magic >+> decoder $ ()
@@ -219,3 +281,14 @@ beheader magic () = forever $ do
         Nothing -> return ()
         Just (Header magic' nbytes) -> unless (magic /= magic')
                                      $ request nbytes >>= respond
+
+-- ** Strict Binary
+
+encode :: Binary a => a -> ByteString
+encode = toStrict . Binary.encode
+
+decode :: Binary a => ByteString -> Maybe a
+decode = fmap third . hush . Binary.decodeOrFail . fromStrict
+  where
+    third (_,_,x) = x
+
