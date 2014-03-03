@@ -15,7 +15,7 @@ description:
 
 source-repository head
     type: git
-    location: https://github.com/jdnavarro/pipes-p2p
+    location: git://github.com/jdnavarro/pipes-p2p
 
 library
   exposed-modules:     Pipes.Network.P2P
@@ -23,14 +23,14 @@ library
   default-language:    Haskell2010
   ghc-options:         -Wall
   build-depends:       base >=4.6 && <4.8,
-                       async,
+                       async >=2,
                        binary >=0.7,
-                       mtl,
-                       bytestring,
-                       errors,
-                       exceptions,
-                       pipes >= 0.4,
-                       pipes-concurrency,
-                       pipes-network >= 0.6,
-                       network,
+                       mtl >=2,
+                       bytestring >=0.10,
+                       errors >=1.4,
+                       exceptions >=0.3,
+                       pipes >=0.4,
+                       pipes-concurrency >=2.0,
+                       pipes-network >=0.6,
+                       network >=2.4,
                        network-simple-sockaddr
