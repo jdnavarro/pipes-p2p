@@ -156,7 +156,7 @@ expect msg = do
 fetch :: (MonadIO m, Binary a) => MaybeT (NodeConnT a m) a
 fetch = do
     NodeConn (Node{magic}) (Connection _ sock) <- ask
-    headerBS <- liftIO $ recv sock hSize
+    headerBS <- recv sock hSize
     (Header magic' nbytes) <- hoistMaybe $ decode headerBS
     guard $ magic == magic'
     bs <- liftIO $ recv sock nbytes
