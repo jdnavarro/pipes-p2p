@@ -11,7 +11,7 @@ maintainer:          j@dannynavarro.net
 category:            Network, Pipes
 synopsis:            P2P network nodes with pipes
 description:
-  Library to facilitate the creation of custom P2P networks using `pipes`.
+  Toy library to facilitate the creation of custom P2P networks using `pipes`.
 
 source-repository head
     type: git

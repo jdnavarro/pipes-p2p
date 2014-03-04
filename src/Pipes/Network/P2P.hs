@@ -5,8 +5,8 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-{-| Use 'node' to create a 'Node' with your desired settings and then run it
-    with 'launch'.
+{-| Use 'node' to create a 'Node' with your desired settings and then 'launch'
+    it.
 -}
 
 module Pipes.Network.P2P
@@ -125,16 +125,16 @@ data Handlers a = Handlers
     -- ^ Action to perform after a connection has ended.
     , msgConsumer  :: forall m . (MonadIO m, MonadCatch m)
                    => a -> Consumer (Either (Relay a) a) (NodeConnT a m) ()
-    -- ^ This consumes incoming messages both from other nodes' connections, as
-    --   @'Left ('Relay' a)@, and from messages coming from the connected socket, as
-    --   @'Right' a@.
+    -- ^ This consumes incoming messages either from other connections in the
+    --   node, as @'Left' ('Relay' a)@, or from the current connected socket,
+    --   as @'Right' a@.
     --   This is only used after a handshake has been successful.
     }
 
--- | A convenient data type to put a 'Node' and a 'Connection' together.
+-- | Convenient data type to put together a 'Node' and a 'Connection'.
 data NodeConn a = NodeConn (Node a) (Connection)
 
-{-| A convenient data type to put together a network address and its
+{-| Convenient data type to put together a network address and its
     corresponding socket.
 -}
 data Connection = Connection SockAddr Socket
@@ -197,7 +197,11 @@ deliver msg = do NodeConn (Node{magic}) (Connection _ sock) <- ask
                  liftIO . send sock $ serialize magic msg
 {-# INLINABLE deliver #-}
 
--- | Receive a message and make sure it's the same as the expected message.
+{-| Receive a message and make sure it's the same as the expected message.
+
+    The message is automatically deserialized and checked for the correct
+    magic bytes.
+-}
 expect :: (MonadIO m, Binary a, Eq a)
        => a
        -- ^ Message
@@ -209,8 +213,9 @@ expect msg = do
 
 {-| Fetch next message.
 
-    Uses the length bytes in the header to pull the exact number of bytes of
-    the message.
+    The message is automatically deserialized and checked for the correct magic
+    bytes. Uses the length bytes in the header to pull the exact number of
+    bytes of the message.
 -}
 fetch :: (MonadIO m, Binary a) => MaybeT (NodeConnT a m) a
 fetch = do
@@ -227,7 +232,7 @@ fetch = do
 -- | Internal message to relay to the rest of connections in the node.
 data Relay a = Relay ThreadId a deriving (Show)
 
--- | Encodes and prepends a 'Header' to a message.
+-- | Serializes and prepends a 'Header' to a message.
 serialize :: Binary a
           => Int -- ^ Magic bytes.
           -> a   -- ^ Message.
