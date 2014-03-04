@@ -1,4 +1,0 @@
-- Command line interface and configurator in different package?
-- Property tests: All nodes must be aware of each other in spite of chaos monkey.
-- Message delivery based on time.
-- Make `Header` a typeclass.
