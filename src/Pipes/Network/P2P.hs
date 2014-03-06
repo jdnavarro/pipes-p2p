@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns #-}
 
 {-| Use 'node' to create a 'Node' with your desired settings and then 'launch'
     it.
@@ -283,7 +284,7 @@ hSize = B.length . encode $ Header 0 0
 -- ** Socket reader
 
 socketReader :: (MonadIO m, Binary a) => Int -> Socket -> Producer a m ()
-socketReader magic sock = fromSocketN sock >+> beheader magic >+> decoder $ ()
+socketReader magic sock = fromSocketN sock >+> exhaust >+> beheader magic >+> decoder $ ()
 {-# INLINABLE socketReader #-}
 
 decoder :: (MonadIO m, Binary a) => () -> Pipe ByteString a m ()
@@ -301,6 +302,17 @@ beheader magic () = forever $ do
                                      $ request nbytes >>= respond
 {-# INLINABLE beheader #-}
 
+-- | Make sure the number of specified bytes are received from upstream.
+exhaust :: MonadIO m => Int -> Proxy Int ByteString Int ByteString m ()
+exhaust n0 = forever $ go B.empty n0
+  where
+    go !acc n = do bs <- request n
+                   let rl = B.length bs
+                   if rl == n
+                   then respond $ acc <> bs
+                   else go (acc <> bs) (n - rl)
+{-# INLINABLE exhaust #-}
+
 -- ** Strict Binary
 
 encode :: Binary a => a -> ByteString
@@ -312,3 +324,4 @@ decode = fmap third . hush . Binary.decodeOrFail . fromStrict
   where
     third (_,_,x) = x
 {-# INLINE decode #-}
+
