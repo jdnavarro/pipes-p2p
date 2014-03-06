@@ -36,7 +36,7 @@ module Pipes.Network.P2P
 import Control.Applicative (Applicative, (<$>))
 import Control.Monad (forever, void, unless, guard)
 import Data.Monoid ((<>))
-import Data.Foldable (for_, forM_)
+import Data.Foldable (for_)
 import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.Async (async, link)
 import GHC.Generics (Generic)
@@ -277,6 +277,7 @@ data Header = Header Int Int deriving (Show, Generic)
 
 instance Binary Header
 
+-- | Byte length of 'Header'.
 hSize :: Int
 hSize = B.length . encode $ Header 0 0
 {-# INLINE hSize #-}
@@ -287,12 +288,20 @@ socketReader :: (MonadIO m, Binary a) => Int -> Socket -> Producer a m ()
 socketReader magic sock = fromSocketN sock >+> exhaust >+> beheader magic >+> decoder $ ()
 {-# INLINABLE socketReader #-}
 
+{- | Decodes 'ByteString's flowing downstream.
+
+     In case of decoding failure, it discards the bytes and tries to decode
+     again from upstream.
+-}
 decoder :: (MonadIO m, Binary a) => () -> Pipe ByteString a m ()
 decoder () = forever $ do
     pbs <- await
-    forM_ (decode pbs) yield
+    for_ (decode pbs) yield
 {-# INLINABLE decoder #-}
 
+{-| Pulls header bytes, checks for magic bytes and pulls the payload based on
+    the expected length in the 'Header'.
+-}
 beheader :: MonadIO m => Int -> () -> Proxy Int ByteString () ByteString m ()
 beheader magic () = forever $ do
     hbs <- request hSize
