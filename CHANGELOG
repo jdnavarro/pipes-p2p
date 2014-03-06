@@ -1,3 +1,8 @@
+0.3
+---
+* Hotfix for `0.2` was wrong making it a brownbag release. This version should
+  now work correctly.
+
 0.2
 ---
 * Make sure specified number of bytes are retrieved from socket.
