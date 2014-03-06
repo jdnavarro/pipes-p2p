@@ -1,5 +1,5 @@
 name:                pipes-p2p
-version:             0.1
+version:             0.2
 cabal-version:       >=1.10
 tested-with:         GHC == 7.6.3
 build-type:          Simple
@@ -12,6 +12,8 @@ category:            Network, Pipes
 synopsis:            P2P network nodes with pipes
 description:
   Toy library to facilitate the creation of custom P2P networks using `pipes`.
+
+extra-source-files: CHANGELOG
 
 source-repository head
     type: git

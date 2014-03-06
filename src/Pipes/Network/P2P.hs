@@ -333,4 +333,3 @@ decode = fmap third . hush . Binary.decodeOrFail . fromStrict
   where
     third (_,_,x) = x
 {-# INLINE decode #-}
-

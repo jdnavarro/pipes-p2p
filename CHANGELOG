@@ -1,0 +1,3 @@
+0.2
+---
+* Make sure specified number of bytes are retrieved from socket.
