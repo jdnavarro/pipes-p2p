@@ -1,4 +1,3 @@
-{-# OPTIONS_HADDOCK ignore-exports #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE DeriveGeneric #-}
