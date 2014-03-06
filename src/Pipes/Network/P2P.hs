@@ -313,12 +313,12 @@ beheader magic () = forever $ do
 
 -- | Make sure the number of specified bytes are received from upstream.
 exhaust :: MonadIO m => Int -> Proxy Int ByteString Int ByteString m ()
-exhaust n0 = forever $ go B.empty n0
+exhaust = go B.empty
   where
     go !acc n = do bs <- request n
                    let rl = B.length bs
                    if rl == n
-                   then respond $ acc <> bs
+                   then respond (acc <> bs) >>= go B.empty
                    else go (acc <> bs) (n - rl)
 {-# INLINABLE exhaust #-}
 
