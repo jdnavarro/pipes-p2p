@@ -17,7 +17,7 @@ extra-source-files: CHANGELOG
 
 source-repository head
     type: git
-    location: git@github.com:jdnavarro/pipes-p2p.git
+    location: git://github.com/jdnavarro/pipes-p2p.git
 
 library
   exposed-modules:     Pipes.Network.P2P
