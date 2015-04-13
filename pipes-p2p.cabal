@@ -30,9 +30,9 @@ library
                        mtl >=2,
                        bytestring >=0.10,
                        errors >=1.4,
-                       exceptions >=0.3,
+                       exceptions >=0.6,
                        pipes >=0.4,
                        pipes-concurrency >=2.0,
                        pipes-network >=0.6,
                        network >=2.4,
-                       network-simple-sockaddr
+                       network-simple-sockaddr >= 0.2

@@ -30,7 +30,7 @@ module Pipes.Network.P2P
   -- * Re-exports
   , MonadIO
   , liftIO
-  , MonadCatch
+  , MonadMask
   ) where
 
 import Control.Applicative (Applicative, (<$>))
@@ -47,7 +47,7 @@ import Data.Binary (Binary)
 import qualified Data.Binary as Binary(encode,decodeOrFail)
 import Control.Monad.Reader (ReaderT(..), MonadReader, runReaderT, ask)
 import Control.Error (MaybeT, hoistMaybe, hush)
-import Control.Monad.Catch (MonadCatch, bracket_)
+import Control.Monad.Catch (MonadThrow, MonadCatch, MonadMask, bracket_)
 import Pipes
   ( Pipe
   , Producer
@@ -123,7 +123,7 @@ data Handlers a = Handlers
     -- ^ Action to perform after a connection has been established.
     , onDisconnect :: Handler a
     -- ^ Action to perform after a connection has ended.
-    , msgConsumer  :: forall m . (MonadIO m, MonadCatch m)
+    , msgConsumer  :: forall m . (MonadIO m, MonadMask m)
                    => a -> Consumer (Either (Relay a) a) (NodeConnT a m) ()
     -- ^ This consumes incoming messages either from other connections in the
     --   node, as @'Left' ('Relay' a)@, or from the current connected socket,
@@ -146,12 +146,14 @@ newtype NodeConnT a m r = NodeConnT
                , Applicative
                , Monad
                , MonadIO
+               , MonadThrow
                , MonadCatch
+               , MonadMask
                , MonadReader (NodeConn a)
                )
 
 -- | Launch a 'Node'.
-launch :: (Functor m, Applicative m, MonadIO m, MonadCatch m, Binary a)
+launch :: (Functor m, Applicative m, MonadIO m, MonadMask m, Binary a)
        => Node a
        -- ^
        -> [SockAddr]
@@ -163,7 +165,7 @@ launch n@Node{address} addrs = do
 {-# INLINABLE launch #-}
 
 -- | Connect a 'Node' to the given pair of 'SockAddr', 'Socket'.
-runNodeConn :: (Functor m, MonadIO m, MonadCatch m, Binary a)
+runNodeConn :: (Functor m, MonadIO m, MonadMask m, Binary a)
             => Node a
             -- ^
             -> Bool
@@ -245,13 +247,13 @@ serialize magic msg = encode (Header magic $ B.length bs) <> bs
 -- * Internal
 
 type Mailbox a = (Output (Relay a), Input (Relay a))
-type HandShaker a = forall m . (Functor m, MonadIO m, MonadCatch m)
+type HandShaker a = forall m . (Functor m, MonadIO m, MonadMask m)
                  => NodeConnT a m (Maybe a)
 type Handler a = forall m . MonadIO m => a -> m ()
 
 
 -- | Coordinates the handlers in the 'Node'.
-handle :: forall a m . (MonadIO m, MonadCatch m, Binary a)
+handle :: forall a m . (MonadIO m, MonadMask m, Binary a)
        => a -> NodeConnT a m ()
 handle msg = do
     NodeConn Node{magic, handlers, broadcaster} (Connection _ sock) <- ask
