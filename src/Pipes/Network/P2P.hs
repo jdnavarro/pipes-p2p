@@ -30,7 +30,6 @@ module Pipes.Network.P2P
   -- * Re-exports
   , MonadIO
   , liftIO
-  , MonadMask
   ) where
 
 import Control.Applicative (Applicative, (<$>))
