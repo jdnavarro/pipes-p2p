@@ -1,4 +1,4 @@
-name:                pipes-p2p
+ame:                pipes-p2p
 version:             0.3
 cabal-version:       >=1.10
 tested-with:         GHC == 7.6.3
@@ -32,7 +32,7 @@ library
                        errors >=1.4,
                        exceptions >=0.6,
                        pipes >=0.4,
-                       pipes-concurrency >=2.0,
+                       pipes-concurrency >=2.0.3,
                        pipes-network >=0.6,
                        network >=2.4,
                        network-simple-sockaddr >= 0.2

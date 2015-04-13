@@ -64,9 +64,9 @@ import qualified Pipes.Prelude as P
 import Pipes.Network.TCP (fromSocketN)
 import qualified Pipes.Concurrent
 import Pipes.Concurrent
-  ( Buffer(Unbounded)
-  , Output
+  ( Output
   , Input
+  , unbounded
   , spawn
   , toOutput
   , fromInput
@@ -110,7 +110,7 @@ node :: (Functor m, Applicative m, MonadIO m, Binary a, Show a)
      -- ^ Functions to define the behavior of the 'Node'.
      -> m (Node a)
 node magic addr handlers =
-    Node magic addr handlers <$> liftIO (spawn Unbounded)
+    Node magic addr handlers <$> liftIO (spawn unbounded)
 {-# INLINABLE node #-}
 
 -- | Functions to define the behavior of a 'Node'.
@@ -259,7 +259,7 @@ handle msg = do
     NodeConn Node{magic, handlers, broadcaster} (Connection _ sock) <- ask
     let Handlers{onConnect, onDisconnect, msgConsumer} = handlers
     bracket_ (onConnect msg) (onDisconnect msg) $ do
-        (ol, il) <- liftIO $ spawn Unbounded
+        (ol, il) <- liftIO $ spawn unbounded
         liftIO $ do
             let (obc, ibc) = broadcaster
             tid <- myThreadId
