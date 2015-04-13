@@ -1,19 +1,19 @@
-ame:                pipes-p2p
+name:                pipes-p2p
 version:             0.3
 cabal-version:       >=1.10
-tested-with:         GHC == 7.6.3
+tested-with:         GHC == 7.6.3, GHC == 7.8.4, GHC == 7.10.1
 build-type:          Simple
 homepage:            https://github.com/jdnavarro/pipes-p2p
 license:             BSD3
 license-file:        LICENSE
 author:              Danny Navarro
-maintainer:          j@dannynavarro.net
+maintainer:          Danny Navarro <j@dannynavarro.net>
 category:            Network, Pipes
 synopsis:            P2P network nodes with pipes
 description:
   Toy library to facilitate the creation of custom P2P networks using `pipes`.
 
-extra-source-files: CHANGELOG
+extra-source-files: CHANGELOG.md README.md
 
 source-repository head
     type: git
